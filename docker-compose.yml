@@ -1,0 +1,32 @@
+# Local PostgreSQL for development and integration tests.
+# Host port 5434 → container 5432 (matches Documents/SETUP.md).
+#
+# Start:  docker compose up -d
+# Stop:   docker compose stop
+# Logs:   docker compose logs -f postgres
+#
+# If an older `livingspace-pg` container already exists from `docker run`,
+# prefer: docker start livingspace-pg
+# Do not run both that container and this compose service at once on 5434.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: livingspace-pg
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: livingspace_dev
+    volumes:
+      - livingspace_pg_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/02-init-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d livingspace_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  livingspace_pg_data:

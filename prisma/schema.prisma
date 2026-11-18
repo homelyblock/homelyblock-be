@@ -1,0 +1,655 @@
+// LivingSpace MVP schema.
+// Connection URL comes from prisma.config.ts (DATABASE_URL).
+// Keep this file aligned with Documents/DATABASE.md.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PlatformRole {
+  PLATFORM_OWNER
+}
+
+enum SocietyStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum UnitStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum MembershipRole {
+  SOCIETY_ADMIN
+  RESIDENT_USER
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
+/// Registration choice for public accounts. This is not an authorization grant.
+/// Society access still comes from an ACTIVE society_memberships row.
+/// PLATFORM_OWNER is never a value here.
+enum AccountType {
+  SOCIETY_ADMIN
+  RESIDENT_USER
+}
+
+enum NoticeStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum NoticeCategory {
+  GENERAL
+  MAINTENANCE
+  EVENT
+  EMERGENCY
+  IMPORTANT
+}
+
+enum NoticeAudienceType {
+  SOCIETY
+  BUILDING
+  UNIT
+}
+
+enum VisitorStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  EXPIRED
+}
+
+enum VisitorEntryType {
+  EXPECTED
+  WALK_IN
+}
+
+enum MaintenanceBillingCycle {
+  MONTHLY
+}
+
+enum MaintenanceConfigStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum MaintenanceConfigScope {
+  SOCIETY
+  BUILDING
+  UNIT
+}
+
+enum MaintenanceBillStatus {
+  DRAFT
+  PUBLISHED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum InvoiceLineType {
+  BASE
+  ADDITIONAL
+  DISCOUNT
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  BANK_TRANSFER
+  CHEQUE
+  OTHER
+}
+
+enum PaymentRecordStatus {
+  RECORDED
+  REVERSED
+}
+
+enum ComplaintCategory {
+  PLUMBING
+  ELECTRICAL
+  CLEANING
+  LIFT
+  SECURITY
+  PARKING
+  GENERAL
+  OTHER
+}
+
+enum ComplaintPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ComplaintStatus {
+  OPEN
+  ACKNOWLEDGED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+enum ServiceCategory {
+  PLUMBING
+  ELECTRICAL
+  CARPENTRY
+  HOUSEKEEPING
+  PEST_CONTROL
+  INTERNET_CABLE
+  APPLIANCE_REPAIR
+  OTHER
+}
+
+enum HouseholdRelationship {
+  SPOUSE
+  CHILD
+  PARENT
+  SIBLING
+  RELATIVE
+  OTHER
+}
+
+model UserProfile {
+  id           String        @id @db.Uuid
+  displayName  String        @map("display_name")
+  email        String?       @unique
+  phone        String?
+  platformRole PlatformRole? @map("platform_role")
+  accountType  AccountType?  @map("account_type")
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  memberships           SocietyMembership[]
+  noticesAuthored       Notice[]            @relation("NoticeAuthor")
+  noticeReads           NoticeRead[]
+  visitorsCreated       Visitor[]           @relation("VisitorCreator")
+  visitorsDecided       Visitor[]           @relation("VisitorDecider")
+  billsBilled           MaintenanceBill[]   @relation("BillBilledUser")
+  paymentsRecorded      MaintenancePayment[] @relation("PaymentRecorder")
+  paymentsReversed      MaintenancePayment[] @relation("PaymentReverser")
+  complaintsCreated     Complaint[]         @relation("ComplaintCreator")
+  complaintsAssigned    Complaint[]         @relation("ComplaintAssignee")
+  complaintStatusChanges ComplaintStatusHistory[] @relation("ComplaintStatusChanger")
+  complaintComments     ComplaintComment[]  @relation("ComplaintCommentAuthor")
+  complaintAttachments  ComplaintAttachment[] @relation("ComplaintAttachmentUploader")
+  serviceProvidersCreated ServiceProvider[]  @relation("ServiceProviderCreator")
+  householdMembersCreated HouseholdMember[] @relation("HouseholdMemberCreator")
+  auditLogs             AuditLog[]
+
+  @@map("user_profiles")
+}
+
+/// Server-recorded registration choice. Written only by the signup-intent
+/// endpoint. The authenticated client cannot change it through Supabase metadata.
+model SignupIntent {
+  userId      String      @id @map("user_id") @db.Uuid
+  accountType AccountType @map("account_type")
+  societyName String?     @map("society_name")
+  city        String?
+  state       String?
+  phone       String?
+  consumedAt  DateTime?   @map("consumed_at") @db.Timestamptz(6)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("signup_intents")
+}
+
+model Society {
+  id            String        @id @default(uuid()) @db.Uuid
+  name          String
+  addressLine1  String?       @map("address_line_1")
+  addressLine2  String?       @map("address_line_2")
+  city          String?
+  state         String?
+  postalCode    String?       @map("postal_code")
+  status        SocietyStatus @default(ACTIVE)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  buildings                 Building[]
+  units                     Unit[]
+  memberships               SocietyMembership[]
+  notices                   Notice[]
+  visitors                  Visitor[]
+  maintenanceConfigurations MaintenanceConfiguration[]
+  maintenanceBills          MaintenanceBill[]
+  maintenancePayments       MaintenancePayment[]
+  complaints                Complaint[]
+  serviceProviders          ServiceProvider[]
+  auditLogs                 AuditLog[]
+
+  @@map("societies")
+}
+
+model Building {
+  id        String   @id @default(uuid()) @db.Uuid
+  societyId String   @map("society_id") @db.Uuid
+  name      String
+  code      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society                   Society                   @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  units                     Unit[]
+  notices                   Notice[]
+  visitors                  Visitor[]
+  maintenanceConfigurations MaintenanceConfiguration[]
+  maintenanceBills          MaintenanceBill[]
+  complaints                Complaint[]
+
+  @@unique([societyId, code])
+  @@index([societyId])
+  @@map("buildings")
+}
+
+model Unit {
+  id         String     @id @default(uuid()) @db.Uuid
+  societyId  String     @map("society_id") @db.Uuid
+  buildingId String     @map("building_id") @db.Uuid
+  unitNumber String     @map("unit_number")
+  status     UnitStatus @default(ACTIVE)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society                   Society                   @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  building                  Building                  @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  primaryForMemberships     SocietyMembership[]
+  notices                   Notice[]
+  visitors                  Visitor[]
+  maintenanceConfigurations MaintenanceConfiguration[]
+  maintenanceBills          MaintenanceBill[]
+  complaints                Complaint[]
+
+  @@unique([buildingId, unitNumber])
+  @@index([societyId, status])
+  @@map("units")
+}
+
+model SocietyMembership {
+  id            String           @id @default(uuid()) @db.Uuid
+  societyId     String           @map("society_id") @db.Uuid
+  userId        String           @map("user_id") @db.Uuid
+  role          MembershipRole
+  status        MembershipStatus @default(INVITED)
+  primaryUnitId String?          @map("primary_unit_id") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society          Society           @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  user             UserProfile       @relation(fields: [userId], references: [id], onDelete: Restrict)
+  primaryUnit      Unit?             @relation(fields: [primaryUnitId], references: [id], onDelete: SetNull)
+  householdMembers HouseholdMember[]
+
+  @@unique([societyId, userId])
+  @@index([societyId, status])
+  @@index([userId, status])
+  @@index([societyId, primaryUnitId])
+  @@map("society_memberships")
+}
+
+/// Non-login household occupants tied to a society membership (and its primary unit).
+model HouseholdMember {
+  id             String                @id @default(uuid()) @db.Uuid
+  membershipId   String                @map("membership_id") @db.Uuid
+  name           String
+  relationship   HouseholdRelationship
+  phone          String?
+  email          String?
+  isActive       Boolean               @default(true) @map("is_active")
+  createdByUserId String               @map("created_by_user_id") @db.Uuid
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  membership SocietyMembership @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+  createdBy  UserProfile       @relation("HouseholdMemberCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([membershipId, isActive])
+  @@map("household_members")
+}
+
+model Notice {
+  id               String             @id @default(uuid()) @db.Uuid
+  societyId        String             @map("society_id") @db.Uuid
+  title            String
+  body             String
+  category         NoticeCategory     @default(GENERAL)
+  audienceType     NoticeAudienceType @default(SOCIETY) @map("audience_type")
+  targetBuildingId String?            @map("target_building_id") @db.Uuid
+  targetUnitId     String?            @map("target_unit_id") @db.Uuid
+  status           NoticeStatus       @default(DRAFT)
+  createdByUserId  String             @map("created_by_user_id") @db.Uuid
+  publishedAt      DateTime?          @map("published_at") @db.Timestamptz(6)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society        Society      @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  createdBy      UserProfile  @relation("NoticeAuthor", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  targetBuilding Building?    @relation(fields: [targetBuildingId], references: [id], onDelete: Restrict)
+  targetUnit     Unit?        @relation(fields: [targetUnitId], references: [id], onDelete: Restrict)
+  reads          NoticeRead[]
+
+  @@index([societyId, status, publishedAt])
+  @@index([societyId, audienceType, targetBuildingId])
+  @@index([societyId, audienceType, targetUnitId])
+  @@map("notices")
+}
+
+model NoticeRead {
+  id       String   @id @default(uuid()) @db.Uuid
+  noticeId String   @map("notice_id") @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  readAt   DateTime @default(now()) @map("read_at") @db.Timestamptz(6)
+
+  notice Notice      @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  user   UserProfile @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([noticeId, userId])
+  @@index([userId, readAt])
+  @@map("notice_reads")
+}
+
+model Visitor {
+  id               String           @id @default(uuid()) @db.Uuid
+  societyId        String           @map("society_id") @db.Uuid
+  buildingId       String           @map("building_id") @db.Uuid
+  unitId           String           @map("unit_id") @db.Uuid
+  visitorName      String           @map("visitor_name")
+  visitorPhone     String           @map("visitor_phone")
+  purpose          String
+  expectedAt       DateTime         @map("expected_at") @db.Timestamptz(6)
+  vehicleNumber    String?          @map("vehicle_number")
+  notes            String?
+  entryType        VisitorEntryType @map("entry_type")
+  status           VisitorStatus    @default(PENDING)
+  createdByUserId  String           @map("created_by_user_id") @db.Uuid
+  decisionByUserId String?          @map("decision_by_user_id") @db.Uuid
+  decisionAt       DateTime?        @map("decision_at") @db.Timestamptz(6)
+  checkedInAt      DateTime?        @map("checked_in_at") @db.Timestamptz(6)
+  checkedOutAt     DateTime?        @map("checked_out_at") @db.Timestamptz(6)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society    Society      @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  building   Building     @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  unit       Unit         @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  createdBy  UserProfile  @relation("VisitorCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  decisionBy UserProfile? @relation("VisitorDecider", fields: [decisionByUserId], references: [id], onDelete: SetNull)
+
+  @@index([societyId, status, createdAt])
+  @@index([societyId, expectedAt])
+  @@index([unitId, expectedAt])
+  @@index([unitId, createdAt])
+  @@index([createdByUserId, createdAt])
+  @@map("visitors")
+}
+
+model MaintenanceConfiguration {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  societyId            String                   @map("society_id") @db.Uuid
+  name                 String
+  description          String?
+  monthlyAmount        Decimal                  @map("monthly_amount") @db.Decimal(12, 2)
+  billingCycle         MaintenanceBillingCycle  @default(MONTHLY) @map("billing_cycle")
+  dueDayOfMonth        Int                      @map("due_day_of_month")
+  additionalAmount     Decimal                  @default(0) @map("additional_amount") @db.Decimal(12, 2)
+  additionalDescription String?                 @map("additional_description")
+  scope                MaintenanceConfigScope   @default(SOCIETY)
+  targetBuildingId     String?                  @map("target_building_id") @db.Uuid
+  targetUnitId         String?                  @map("target_unit_id") @db.Uuid
+  status               MaintenanceConfigStatus  @default(ACTIVE)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society        Society           @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  targetBuilding Building?         @relation(fields: [targetBuildingId], references: [id], onDelete: Restrict)
+  targetUnit     Unit?             @relation(fields: [targetUnitId], references: [id], onDelete: Restrict)
+  bills          MaintenanceBill[]
+
+  @@index([societyId, status])
+  @@map("maintenance_configurations")
+}
+
+model MaintenanceBill {
+  id               String                @id @default(uuid()) @db.Uuid
+  societyId        String                @map("society_id") @db.Uuid
+  buildingId       String                @map("building_id") @db.Uuid
+  unitId           String                @map("unit_id") @db.Uuid
+  configId         String?               @map("config_id") @db.Uuid
+  billedUserId     String?               @map("billed_user_id") @db.Uuid
+  invoiceNumber    String                @map("invoice_number")
+  periodYear       Int                   @map("period_year")
+  periodMonth      Int                   @map("period_month")
+  periodStart      DateTime              @map("period_start") @db.Date
+  periodEnd        DateTime              @map("period_end") @db.Date
+  invoiceDate      DateTime              @map("invoice_date") @db.Date
+  dueDate          DateTime              @map("due_date") @db.Date
+  baseAmount       Decimal               @map("base_amount") @db.Decimal(12, 2)
+  additionalAmount Decimal               @default(0) @map("additional_amount") @db.Decimal(12, 2)
+  discountAmount   Decimal               @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  totalAmount      Decimal               @map("total_amount") @db.Decimal(12, 2)
+  paidAmount       Decimal               @default(0) @map("paid_amount") @db.Decimal(12, 2)
+  outstandingAmount Decimal              @map("outstanding_amount") @db.Decimal(12, 2)
+  status           MaintenanceBillStatus @default(DRAFT)
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society    Society                 @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  building   Building                @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  unit       Unit                    @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  config     MaintenanceConfiguration? @relation(fields: [configId], references: [id], onDelete: SetNull)
+  billedUser UserProfile?            @relation("BillBilledUser", fields: [billedUserId], references: [id], onDelete: SetNull)
+  lineItems  MaintenanceBillLineItem[]
+  payments   MaintenancePayment[]
+
+  @@unique([societyId, invoiceNumber])
+  @@index([societyId, status, dueDate])
+  @@index([societyId, periodYear, periodMonth])
+  @@index([unitId, periodYear, periodMonth])
+  @@index([unitId, status])
+  @@map("maintenance_bills")
+}
+
+model MaintenanceBillLineItem {
+  id          String          @id @default(uuid()) @db.Uuid
+  billId      String          @map("bill_id") @db.Uuid
+  description String
+  amount      Decimal         @db.Decimal(12, 2)
+  lineType    InvoiceLineType @map("line_type")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  bill MaintenanceBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+  @@map("maintenance_bill_line_items")
+}
+
+model MaintenancePayment {
+  id               String              @id @default(uuid()) @db.Uuid
+  societyId        String              @map("society_id") @db.Uuid
+  billId           String              @map("bill_id") @db.Uuid
+  amount           Decimal             @db.Decimal(12, 2)
+  method           PaymentMethod
+  paidAt           DateTime            @map("paid_at") @db.Timestamptz(6)
+  referenceNumber  String?             @map("reference_number")
+  notes            String?
+  status           PaymentRecordStatus @default(RECORDED)
+  idempotencyKey   String              @map("idempotency_key")
+  requestHash      String              @map("request_hash")
+  recordedByUserId String              @map("recorded_by_user_id") @db.Uuid
+  reversedAt       DateTime?           @map("reversed_at") @db.Timestamptz(6)
+  reversedByUserId String?             @map("reversed_by_user_id") @db.Uuid
+  reversalReason   String?             @map("reversal_reason")
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society    Society      @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  bill       MaintenanceBill @relation(fields: [billId], references: [id], onDelete: Restrict)
+  recordedBy UserProfile  @relation("PaymentRecorder", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+  reversedBy UserProfile? @relation("PaymentReverser", fields: [reversedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([societyId, recordedByUserId, idempotencyKey])
+  @@index([societyId, paidAt])
+  @@index([billId, status])
+  @@map("maintenance_payments")
+}
+
+model Complaint {
+  id               String            @id @default(uuid()) @db.Uuid
+  societyId        String            @map("society_id") @db.Uuid
+  buildingId       String            @map("building_id") @db.Uuid
+  unitId           String            @map("unit_id") @db.Uuid
+  createdByUserId  String            @map("created_by_user_id") @db.Uuid
+  assignedToUserId String?           @map("assigned_to_user_id") @db.Uuid
+  title            String
+  description      String
+  category         ComplaintCategory
+  priority         ComplaintPriority @default(MEDIUM)
+  status           ComplaintStatus   @default(OPEN)
+  resolutionNotes  String?           @map("resolution_notes")
+  resolvedAt       DateTime?         @map("resolved_at") @db.Timestamptz(6)
+  closedAt         DateTime?         @map("closed_at") @db.Timestamptz(6)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society      Society                  @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  building     Building                 @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  unit         Unit                     @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  createdBy    UserProfile              @relation("ComplaintCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  assignedTo   UserProfile?             @relation("ComplaintAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  statusHistory ComplaintStatusHistory[]
+  comments     ComplaintComment[]
+  attachments  ComplaintAttachment[]
+
+  @@index([societyId, status, createdAt])
+  @@index([societyId, category])
+  @@index([societyId, priority])
+  @@index([unitId, createdAt])
+  @@index([createdByUserId, createdAt])
+  @@index([assignedToUserId, status])
+  @@map("complaints")
+}
+
+model ComplaintStatusHistory {
+  id             String          @id @default(uuid()) @db.Uuid
+  complaintId    String          @map("complaint_id") @db.Uuid
+  fromStatus     ComplaintStatus? @map("from_status")
+  toStatus       ComplaintStatus @map("to_status")
+  changedByUserId String         @map("changed_by_user_id") @db.Uuid
+  note           String?
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  complaint Complaint   @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  changedBy UserProfile @relation("ComplaintStatusChanger", fields: [changedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([complaintId, createdAt])
+  @@map("complaint_status_history")
+}
+
+model ComplaintComment {
+  id          String   @id @default(uuid()) @db.Uuid
+  complaintId String   @map("complaint_id") @db.Uuid
+  authorUserId String  @map("author_user_id") @db.Uuid
+  body        String
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  complaint Complaint   @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  author    UserProfile @relation("ComplaintCommentAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+
+  @@index([complaintId, createdAt])
+  @@map("complaint_comments")
+}
+
+model ComplaintAttachment {
+  id               String   @id @default(uuid()) @db.Uuid
+  complaintId      String   @map("complaint_id") @db.Uuid
+  uploadedByUserId String   @map("uploaded_by_user_id") @db.Uuid
+  storageKey       String   @map("storage_key")
+  originalFilename String   @map("original_filename")
+  contentType      String   @map("content_type")
+  sizeBytes        Int      @map("size_bytes")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  complaint  Complaint   @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  uploadedBy UserProfile @relation("ComplaintAttachmentUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([complaintId, createdAt])
+  @@unique([storageKey])
+  @@map("complaint_attachments")
+}
+
+model ServiceProvider {
+  id               String          @id @default(uuid()) @db.Uuid
+  societyId        String          @map("society_id") @db.Uuid
+  name             String
+  category         ServiceCategory
+  description      String?
+  contactPerson    String?         @map("contact_person")
+  phone            String
+  whatsappNumber   String?         @map("whatsapp_number")
+  address          String?
+  isActive         Boolean         @default(true) @map("is_active")
+  createdByUserId  String          @map("created_by_user_id") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  society   Society     @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  createdBy UserProfile @relation("ServiceProviderCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([societyId, isActive, category])
+  @@index([societyId, name])
+  @@map("service_providers")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  societyId   String?  @map("society_id") @db.Uuid
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  action      String
+  entityType  String   @map("entity_type")
+  entityId    String   @map("entity_id") @db.Uuid
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  society Society?     @relation(fields: [societyId], references: [id], onDelete: SetNull)
+  actor   UserProfile? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([societyId, createdAt])
+  @@map("audit_logs")
+}
+
+/// Public contact-form messages. Not a society complaint.
+model ContactInquiry {
+  id                  String   @id @default(uuid()) @db.Uuid
+  fullName            String   @map("full_name")
+  email               String
+  subject             String
+  message             String
+  societyName         String?  @map("society_name")
+  privacyAcknowledged Boolean  @map("privacy_acknowledged")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([createdAt])
+  @@map("contact_inquiries")
+}
