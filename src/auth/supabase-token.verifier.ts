@@ -94,12 +94,12 @@ export class SupabaseTokenVerifier implements TokenVerifier {
       (typeof metadata.full_name === 'string' && metadata.full_name) ||
       (typeof metadata.name === 'string' && metadata.name) ||
       (typeof payload.email === 'string' && payload.email) ||
-      'LivingSpace user';
+      'HomelyBlock user';
 
     return {
       sub: payload.sub,
       email: typeof payload.email === 'string' ? payload.email : undefined,
-      displayName: displayNameCandidate.trim() || 'LivingSpace user',
+      displayName: displayNameCandidate.trim() || 'HomelyBlock user',
       role: typeof payload.role === 'string' ? payload.role : undefined,
       expiresAt: typeof payload.exp === 'number' ? payload.exp : undefined,
     };

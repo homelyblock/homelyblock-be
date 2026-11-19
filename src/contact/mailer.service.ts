@@ -36,7 +36,7 @@ export class MailerService {
       ? `Society name: ${inquiry.societyName}\n`
       : '';
     const supportText = [
-      'A message was submitted through the LivingSpace contact form.',
+      'A message was submitted through the HomelyBlock contact form.',
       '',
       `Reference: ${inquiry.id}`,
       `Name: ${inquiry.fullName}`,
@@ -52,11 +52,11 @@ export class MailerService {
     const confirmationText = [
       `Hello ${inquiry.fullName},`,
       '',
-      'We received your message to LivingSpace.',
+      'We received your message to HomelyBlock.',
       `Reference: ${inquiry.id}`,
       `Subject: ${inquiry.subject}`,
       '',
-      'Society matters, including complaints about a building or a neighbour, should go to your society administrator. This inbox is for the LivingSpace platform.',
+      'Society matters, including complaints about a building or a neighbour, should go to your society administrator. This inbox is for the HomelyBlock platform.',
       '',
       'This address is not monitored for password resets. Use the Forgot password link on the sign-in page for account access.',
     ].join('\n');
@@ -65,13 +65,13 @@ export class MailerService {
       from: mailFrom,
       to: supportEmail,
       replyTo: inquiry.email,
-      subject: `LivingSpace contact: ${inquiry.subject}`,
+      subject: `HomelyBlock contact: ${inquiry.subject}`,
       text: supportText,
     });
     const confirmationSent = await this.send(apiKey, {
       from: mailFrom,
       to: inquiry.email,
-      subject: 'We received your LivingSpace message',
+      subject: 'We received your HomelyBlock message',
       text: confirmationText,
     });
 

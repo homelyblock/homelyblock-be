@@ -79,10 +79,10 @@ export function configureApp(
 
   if (enableSwagger) {
     const swaggerConfig = new DocumentBuilder()
-      .setTitle('LivingSpace API')
+      .setTitle('HomelyBlock API')
       .setDescription(
         [
-          'LivingSpace backend API.',
+          'HomelyBlock backend API.',
           '',
           'Protected routes expect a Supabase access token.',
           'Click **Authorize**, paste the JWT (without the `Bearer ` prefix), then use **Try it out**.',
