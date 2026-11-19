@@ -8,6 +8,20 @@ import type {
   VisitorStatus,
 } from '../generated/prisma/client.js';
 
+export type AttentionCounts = {
+  complaints: number;
+  members: number;
+  visitors: number;
+  notices: number;
+  billing: number;
+};
+
+export type AttentionDto = {
+  societyId: string;
+  scope: 'ADMIN' | 'RESIDENT';
+  counts: AttentionCounts;
+};
+
 export type DashboardActivityItem = {
   id: string;
   type: string;

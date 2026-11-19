@@ -59,6 +59,19 @@ export class DashboardController {
     return { data };
   }
 
+  @Get('attention')
+  @ApiOperation({
+    summary: 'Role-scoped counts of items that still need attention',
+  })
+  @ApiOkResponse({ description: 'Attention counts for the caller and society' })
+  async attention(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('societyId', ParseUUIDPipe) societyId: string,
+  ) {
+    const data = await this.dashboard.getAttention(user, societyId);
+    return { data };
+  }
+
   @Get('activity')
   @ApiOperation({
     summary: 'Recent society activity (role-scoped)',

@@ -25,6 +25,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { VisitorsService } from '../visitors/visitors.service.js';
 import type {
   AdminDashboardDto,
+  AttentionDto,
   DashboardActivityItem,
   ResidentDashboardDto,
 } from './dashboard.types.js';
@@ -398,6 +399,128 @@ export class DashboardService {
     };
   }
 
+  async getAttention(
+    user: AuthenticatedUser,
+    societyId: string,
+  ): Promise<AttentionDto> {
+    const membership = await this.authorization.assertCanViewSociety(
+      user,
+      societyId,
+    );
+    const isAdmin =
+      user.platformRole === PlatformRole.PLATFORM_OWNER ||
+      membership?.role === MembershipRole.SOCIETY_ADMIN;
+
+    if (isAdmin) {
+      const [complaints, members, visitors, notices, billing] =
+        await Promise.all([
+          this.prisma.complaint.count({
+            where: {
+              societyId,
+              status: {
+                in: [
+                  ComplaintStatus.OPEN,
+                  ComplaintStatus.ACKNOWLEDGED,
+                  ComplaintStatus.IN_PROGRESS,
+                  ComplaintStatus.REOPENED,
+                ],
+              },
+            },
+          }),
+          this.prisma.societyMembership.count({
+            where: { societyId, status: MembershipStatus.INVITED },
+          }),
+          this.prisma.visitor.count({
+            where: { societyId, status: VisitorStatus.PENDING },
+          }),
+          this.prisma.notice.count({
+            where: {
+              societyId,
+              status: NoticeStatus.PUBLISHED,
+              reads: { none: { userId: user.id } },
+            },
+          }),
+          this.prisma.maintenanceBill.count({
+            where: { societyId, status: MaintenanceBillStatus.OVERDUE },
+          }),
+        ]);
+
+      return {
+        societyId,
+        scope: 'ADMIN',
+        counts: { complaints, members, visitors, notices, billing },
+      };
+    }
+
+    if (!membership || membership.role !== MembershipRole.RESIDENT_USER) {
+      throw new ForbiddenException({
+        message: 'You do not have permission to access this society',
+        code: 'FORBIDDEN',
+      });
+    }
+
+    const home = await this.prisma.societyMembership.findFirst({
+      where: {
+        userId: user.id,
+        societyId,
+        status: MembershipStatus.ACTIVE,
+        role: MembershipRole.RESIDENT_USER,
+      },
+      select: { primaryUnitId: true },
+    });
+    if (!home) {
+      throw new ForbiddenException({
+        message: 'You do not have an active membership in this society',
+        code: 'FORBIDDEN',
+      });
+    }
+
+    const [complaints, visitors, notices, billing] = await Promise.all([
+      this.prisma.complaint.count({
+        where: {
+          societyId,
+          createdByUserId: user.id,
+          status: ComplaintStatus.RESOLVED,
+        },
+      }),
+      this.prisma.visitor.count({
+        where: {
+          societyId,
+          createdByUserId: user.id,
+          status: VisitorStatus.PENDING,
+        },
+      }),
+      this.countUnreadNotices(user.id, societyId),
+      home.primaryUnitId
+        ? this.prisma.maintenanceBill.count({
+            where: {
+              societyId,
+              unitId: home.primaryUnitId,
+              status: {
+                in: [
+                  MaintenanceBillStatus.PUBLISHED,
+                  MaintenanceBillStatus.PARTIALLY_PAID,
+                  MaintenanceBillStatus.OVERDUE,
+                ],
+              },
+            },
+          })
+        : Promise.resolve(0),
+    ]);
+
+    return {
+      societyId,
+      scope: 'RESIDENT',
+      counts: {
+        complaints,
+        members: 0,
+        visitors,
+        notices,
+        billing,
+      },
+    };
+  }
+
   async getActivity(
     user: AuthenticatedUser,
     societyId: string,
@@ -493,23 +616,14 @@ export class DashboardService {
         : []),
     ];
 
-    const notices = await this.prisma.notice.findMany({
+    return this.prisma.notice.count({
       where: {
         societyId,
         status: NoticeStatus.PUBLISHED,
         OR: audienceFilters,
-      },
-      select: {
-        id: true,
-        reads: {
-          where: { userId },
-          select: { id: true },
-          take: 1,
-        },
+        reads: { none: { userId } },
       },
     });
-
-    return notices.filter((n) => n.reads.length === 0).length;
   }
 
   private buildResidentActivity(input: {

@@ -21,6 +21,7 @@ describe('Dashboard (e2e)', () => {
   const getResidentDashboard = vi.fn();
   const getAdminDashboard = vi.fn();
   const getActivity = vi.fn();
+  const getAttention = vi.fn();
 
   const societyId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const userId = '11111111-1111-4111-8111-111111111111';
@@ -32,6 +33,7 @@ describe('Dashboard (e2e)', () => {
     getResidentDashboard.mockReset();
     getAdminDashboard.mockReset();
     getActivity.mockReset();
+    getAttention.mockReset();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -45,6 +47,7 @@ describe('Dashboard (e2e)', () => {
         getResidentDashboard,
         getAdminDashboard,
         getActivity,
+        getAttention,
       })
       .compile();
 
@@ -95,5 +98,30 @@ describe('Dashboard (e2e)', () => {
       .expect(200);
 
     expect(getAdminDashboard).toHaveBeenCalled();
+  });
+
+  it('returns attention counts without accepting caller-supplied totals', async () => {
+    mockAuth({
+      id: userId,
+      displayName: 'User',
+      email: 'u@example.com',
+      platformRole: null,
+    });
+    getAttention.mockResolvedValue({
+      societyId,
+      scope: 'RESIDENT',
+      counts: { complaints: 0, members: 0, visitors: 1, notices: 2, billing: 1 },
+    });
+
+    const response = await request(app.getHttpServer())
+      .get(`/api/v1/societies/${societyId}/dashboard/attention`)
+      .set('Authorization', 'Bearer token')
+      .expect(200);
+
+    expect(response.body.data.counts.notices).toBe(2);
+    expect(getAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: userId }),
+      societyId,
+    );
   });
 });

@@ -40,33 +40,77 @@ export class UsersService {
     identity: VerifiedAccessToken,
   ): Promise<AuthenticatedUser> {
     const email = identity.email?.trim() || undefined;
-
-    const profile = await this.prisma.userProfile.upsert({
+    const existing = await this.prisma.userProfile.findUnique({
       where: { id: identity.sub },
-      create: {
-        id: identity.sub,
-        displayName: identity.displayName,
-        email,
-      },
-      update: email
-        ? {
-            email,
-          }
-        : {},
-      select: {
-        id: true,
-        displayName: true,
-        email: true,
-        platformRole: true,
-      },
+      select: profileIdentitySelect,
     });
 
-    return {
-      id: profile.id,
-      email: profile.email ?? identity.email,
-      displayName: profile.displayName,
-      platformRole: profile.platformRole,
-    };
+    if (existing) {
+      if (
+        email &&
+        existing.email?.toLowerCase() !== email.toLowerCase() &&
+        !(await this.emailTakenBySomeoneElse(email, identity.sub))
+      ) {
+        const updated = await this.prisma.userProfile.update({
+          where: { id: identity.sub },
+          data: { email },
+          select: profileIdentitySelect,
+        });
+        return toAuthenticatedUser(updated, identity);
+      }
+      return toAuthenticatedUser(existing, identity);
+    }
+
+    const byEmail = email ? await this.findProfileByEmail(email) : null;
+    if (byEmail) {
+      // Memberships reference the stored profile id. A recreated Supabase
+      // user keeps the same verified email and a new subject.
+      return toAuthenticatedUser(byEmail, identity);
+    }
+
+    try {
+      const created = await this.prisma.userProfile.create({
+        data: {
+          id: identity.sub,
+          displayName: identity.displayName,
+          email,
+        },
+        select: profileIdentitySelect,
+      });
+      return toAuthenticatedUser(created, identity);
+    } catch (error) {
+      if (!isUniqueViolation(error) || !email) {
+        throw error;
+      }
+      const raced = await this.findProfileByEmail(email);
+      if (!raced) {
+        throw error;
+      }
+      return toAuthenticatedUser(raced, identity);
+    }
+  }
+
+  private async emailTakenBySomeoneElse(
+    email: string,
+    userId: string,
+  ): Promise<boolean> {
+    const owner = await this.prisma.userProfile.findFirst({
+      where: {
+        id: { not: userId },
+        email: { equals: email, mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+    return owner !== null;
+  }
+
+  private findProfileByEmail(email: string) {
+    return this.prisma.userProfile.findFirst({
+      where: {
+        email: { equals: email, mode: 'insensitive' },
+      },
+      select: profileIdentitySelect,
+    });
   }
 
   async searchProfiles(
@@ -502,6 +546,30 @@ function toAccountType(value: string): AccountType {
     message: 'Choose a society administrator or resident account',
     code: 'BAD_REQUEST',
   });
+}
+
+const profileIdentitySelect = {
+  id: true,
+  displayName: true,
+  email: true,
+  platformRole: true,
+} as const;
+
+function toAuthenticatedUser(
+  profile: {
+    id: string;
+    displayName: string;
+    email: string | null;
+    platformRole: PlatformRole | null;
+  },
+  identity: VerifiedAccessToken,
+): AuthenticatedUser {
+  return {
+    id: profile.id,
+    email: profile.email ?? identity.email,
+    displayName: profile.displayName,
+    platformRole: profile.platformRole,
+  };
 }
 
 function isUniqueViolation(error: unknown): boolean {

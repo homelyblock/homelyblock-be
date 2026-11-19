@@ -37,6 +37,8 @@ const databaseUrl = requireIntegrationDatabaseUrl();
 describe('Dashboard PostgreSQL integration', () => {
   let prisma: PrismaClient;
   let dashboard: DashboardService;
+  let complaints: ComplaintsService;
+  let notices: NoticesService;
 
   const adminId = randomUUID();
   const residentId = randomUUID();
@@ -79,16 +81,18 @@ describe('Dashboard PostgreSQL integration', () => {
     prisma = new PrismaClient({ adapter });
     const prismaService = prisma as unknown as PrismaService;
     const authorization = new AuthorizationService(prismaService);
+    complaints = new ComplaintsService(
+      prismaService,
+      authorization,
+      new DisabledComplaintAttachmentStorage(),
+    );
+    notices = new NoticesService(prismaService, authorization);
     dashboard = new DashboardService(
       prismaService,
       authorization,
       new BillingService(prismaService, authorization),
-      new ComplaintsService(
-        prismaService,
-        authorization,
-        new DisabledComplaintAttachmentStorage(),
-      ),
-      new NoticesService(prismaService, authorization),
+      complaints,
+      notices,
       new VisitorsService(prismaService, authorization),
     );
 
@@ -340,5 +344,87 @@ describe('Dashboard PostgreSQL integration', () => {
     await expect(
       dashboard.getResidentDashboard(resident, societyBId),
     ).rejects.toBeInstanceOf(ForbiddenException);
+
+    const adminAttention = await dashboard.getAttention(admin, societyAId);
+    expect(adminAttention.scope).toBe('ADMIN');
+    expect(adminAttention.counts.complaints).toBeGreaterThanOrEqual(1);
+    expect(adminAttention.counts.visitors).toBeGreaterThanOrEqual(1);
+    expect(adminAttention.counts.notices).toBeGreaterThanOrEqual(1);
+    expect(adminAttention.societyId).toBe(societyAId);
+
+    const residentAttention = await dashboard.getAttention(resident, societyAId);
+    expect(residentAttention.scope).toBe('RESIDENT');
+    expect(residentAttention.counts.members).toBe(0);
+    expect(residentAttention.counts.complaints).toBe(0);
+    expect(residentAttention.counts.visitors).toBeGreaterThanOrEqual(1);
+    expect(residentAttention.counts.billing).toBeGreaterThanOrEqual(1);
+
+    await expect(
+      dashboard.getAttention(otherAdmin, societyAId),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      dashboard.getAttention(resident, societyBId),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('moves attention counts through complaint, notice, and bill workflows', async () => {
+    const adminBefore = await dashboard.getAttention(admin, societyAId);
+    const residentBefore = await dashboard.getAttention(resident, societyAId);
+    const complaint = await prisma.complaint.findFirstOrThrow({
+      where: { societyId: societyAId, createdByUserId: residentId },
+    });
+
+    await complaints.acknowledge(admin, complaint.id);
+    await complaints.start(admin, complaint.id);
+    const stillOpen = await dashboard.getAttention(admin, societyAId);
+    expect(stillOpen.counts.complaints).toBe(adminBefore.counts.complaints);
+    expect(stillOpen.counts.visitors).toBe(adminBefore.counts.visitors);
+
+    await complaints.resolve(admin, complaint.id, {
+      resolutionNotes: 'Tap washer replaced',
+    });
+    const resolvedAdmin = await dashboard.getAttention(admin, societyAId);
+    const resolvedResident = await dashboard.getAttention(resident, societyAId);
+    expect(resolvedAdmin.counts.complaints).toBe(adminBefore.counts.complaints - 1);
+    expect(resolvedResident.counts.complaints).toBe(
+      residentBefore.counts.complaints + 1,
+    );
+    expect(resolvedAdmin.counts.visitors).toBe(adminBefore.counts.visitors);
+    expect(resolvedResident.counts.billing).toBe(residentBefore.counts.billing);
+
+    await complaints.reopen(resident, complaint.id, { note: 'It is leaking again' });
+    const reopenedAdmin = await dashboard.getAttention(admin, societyAId);
+    const reopenedResident = await dashboard.getAttention(resident, societyAId);
+    expect(reopenedAdmin.counts.complaints).toBe(resolvedAdmin.counts.complaints + 1);
+    expect(reopenedResident.counts.complaints).toBe(
+      resolvedResident.counts.complaints - 1,
+    );
+
+    const notice = await prisma.notice.findFirstOrThrow({
+      where: { societyId: societyAId, status: NoticeStatus.PUBLISHED },
+    });
+    const adminNotices = (await dashboard.getAttention(admin, societyAId)).counts
+      .notices;
+    await notices.markRead(resident, notice.id);
+    expect((await dashboard.getAttention(resident, societyAId)).counts.notices).toBe(
+      residentBefore.counts.notices - 1,
+    );
+    expect((await dashboard.getAttention(admin, societyAId)).counts.notices).toBe(
+      adminNotices,
+    );
+
+    const bill = await prisma.maintenanceBill.findFirstOrThrow({
+      where: { societyId: societyAId, unitId: unitAId },
+    });
+    await prisma.maintenanceBill.update({
+      where: { id: bill.id },
+      data: { status: MaintenanceBillStatus.PAID, outstandingAmount: '0.00' },
+    });
+    expect((await dashboard.getAttention(resident, societyAId)).counts.billing).toBe(
+      residentBefore.counts.billing - 1,
+    );
+    expect((await dashboard.getAttention(admin, societyAId)).counts.billing).toBe(
+      adminBefore.counts.billing,
+    );
   });
 });

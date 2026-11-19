@@ -368,3 +368,56 @@ describe('UsersService onboarding', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 });
+
+describe('UsersService.ensureProfile', () => {
+  const findUnique = vi.fn();
+  const findFirst = vi.fn();
+  const update = vi.fn();
+  const create = vi.fn();
+  let service: UsersService;
+
+  const stored = {
+    id: '33333333-3333-4333-8333-333333333333',
+    displayName: 'Anita Desai',
+    email: 'anita@example.com',
+    platformRole: null,
+  };
+
+  beforeEach(() => {
+    findUnique.mockReset();
+    findFirst.mockReset();
+    update.mockReset();
+    create.mockReset();
+    service = new UsersService({
+      userProfile: { findUnique, findFirst, update, create },
+    } as unknown as PrismaService);
+  });
+
+  it('returns the existing profile when the verified email belongs to an older auth id', async () => {
+    findUnique.mockResolvedValue(null);
+    findFirst.mockResolvedValue(stored);
+
+    const result = await service.ensureProfile({
+      sub: '44444444-4444-4444-8444-444444444444',
+      email: 'Anita@example.com',
+      displayName: 'Anita Desai',
+    });
+
+    expect(result.id).toBe(stored.id);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the current profile when another profile already owns the new email', async () => {
+    findUnique.mockResolvedValue({ ...stored, email: 'old@example.com' });
+    findFirst.mockResolvedValue({ id: 'other' });
+
+    const result = await service.ensureProfile({
+      sub: stored.id,
+      email: 'anita@example.com',
+      displayName: 'Anita Desai',
+    });
+
+    expect(result.email).toBe('old@example.com');
+    expect(update).not.toHaveBeenCalled();
+  });
+});

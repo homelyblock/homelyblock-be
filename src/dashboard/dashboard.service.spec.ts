@@ -5,6 +5,7 @@ import { AuthorizationService } from '../authorization/authorization.service.js'
 import { BillingService } from '../billing/billing.service.js';
 import { ComplaintsService } from '../complaints/complaints.service.js';
 import {
+  ComplaintStatus,
   MembershipRole,
   MembershipStatus,
   PlatformRole,
@@ -48,6 +49,7 @@ describe('DashboardService', () => {
   const auditFindMany = vi.fn();
   const paymentFindMany = vi.fn();
   const complaintCount = vi.fn();
+  const billCount = vi.fn();
 
   const billingGetDashboard = vi.fn();
   const billingListBills = vi.fn();
@@ -76,6 +78,7 @@ describe('DashboardService', () => {
       auditFindMany,
       paymentFindMany,
       complaintCount,
+      billCount,
       billingGetDashboard,
       billingListBills,
       complaintsGetDashboard,
@@ -102,6 +105,7 @@ describe('DashboardService', () => {
         auditLog: { findMany: auditFindMany },
         maintenancePayment: { findMany: paymentFindMany },
         complaint: { count: complaintCount },
+        maintenanceBill: { count: billCount },
       } as unknown as PrismaService,
       {
         assertCanViewSociety,
@@ -388,5 +392,121 @@ describe('DashboardService', () => {
 
     const residentActivity = await service.getActivity(resident, societyId, 5);
     expect(residentActivity.role).toBe('RESIDENT');
+  });
+
+  it('scopes admin attention counts to the society and role', async () => {
+    assertCanViewSociety.mockResolvedValue({
+      id: 'm-admin',
+      role: MembershipRole.SOCIETY_ADMIN,
+      primaryUnitId: null,
+    });
+    complaintCount.mockResolvedValue(3);
+    membershipCount.mockResolvedValue(2);
+    visitorCount.mockResolvedValue(1);
+    noticeCount.mockResolvedValue(4);
+    billCount.mockResolvedValue(5);
+
+    const result = await service.getAttention(admin, societyId);
+
+    expect(result.scope).toBe('ADMIN');
+    expect(result.counts).toEqual({
+      complaints: 3,
+      members: 2,
+      visitors: 1,
+      notices: 4,
+      billing: 5,
+    });
+    expect(complaintCount).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        societyId,
+        status: {
+          in: expect.arrayContaining([ComplaintStatus.OPEN, ComplaintStatus.REOPENED]),
+        },
+      }),
+    });
+    expect(JSON.stringify(complaintCount.mock.calls[0]?.[0])).not.toContain(
+      admin.id,
+    );
+  });
+
+  it('scopes resident attention to their own unresolved responses and home', async () => {
+    assertCanViewSociety.mockResolvedValue({
+      id: 'm1',
+      role: MembershipRole.RESIDENT_USER,
+      primaryUnitId: unitId,
+    });
+    membershipFindFirst.mockResolvedValue({
+      primaryUnitId: unitId,
+      primaryUnit: { buildingId: 'b1' },
+    });
+    noticeCount.mockResolvedValue(1);
+    complaintCount.mockResolvedValue(1);
+    visitorCount.mockResolvedValue(2);
+    billCount.mockResolvedValue(3);
+
+    const result = await service.getAttention(resident, societyId);
+
+    expect(result.scope).toBe('RESIDENT');
+    expect(result.counts).toEqual({
+      complaints: 1,
+      members: 0,
+      visitors: 2,
+      notices: 1,
+      billing: 3,
+    });
+    expect(complaintCount).toHaveBeenCalledWith({
+      where: {
+        societyId,
+        createdByUserId: resident.id,
+        status: ComplaintStatus.RESOLVED,
+      },
+    });
+    expect(billCount).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        societyId,
+        unitId,
+      }),
+    });
+    expect(noticeCount).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        societyId,
+        reads: { none: { userId: resident.id } },
+      }),
+    });
+    const noticeWhere = noticeCount.mock.calls.at(-1)?.[0] as {
+      where: { OR: Array<{ audienceType: string }> };
+    };
+    expect(noticeWhere.where.OR.map((item) => item.audienceType)).toEqual([
+      'SOCIETY',
+      'BUILDING',
+      'UNIT',
+    ]);
+  });
+
+  it('counts platform-owner attention as admin for that society only', async () => {
+    const owner: AuthenticatedUser = {
+      ...admin,
+      platformRole: PlatformRole.PLATFORM_OWNER,
+    };
+    assertCanViewSociety.mockResolvedValue(null);
+    complaintCount.mockResolvedValue(2);
+    membershipCount.mockResolvedValue(1);
+    visitorCount.mockResolvedValue(0);
+    noticeCount.mockResolvedValue(0);
+    billCount.mockResolvedValue(0);
+
+    const result = await service.getAttention(owner, societyId);
+
+    expect(result.scope).toBe('ADMIN');
+    expect(assertCanViewSociety).toHaveBeenCalledWith(owner, societyId);
+    expect(JSON.stringify(complaintCount.mock.calls[0]?.[0])).not.toContain(owner.id);
+  });
+
+  it('does not return attention for a society the caller cannot view', async () => {
+    assertCanViewSociety.mockRejectedValue(new ForbiddenException());
+    await expect(service.getAttention(resident, societyId)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(complaintCount).not.toHaveBeenCalled();
   });
 });
