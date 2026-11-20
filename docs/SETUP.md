@@ -66,7 +66,7 @@ npm --prefix homelyblock-fe run dev
 - Application: http://localhost:3000
 - API liveness: http://localhost:4000/api/v1/health
 - API readiness: http://localhost:4000/api/v1/health/ready
-- Swagger: http://localhost:4000/api/docs while `NODE_ENV` is not `production`
+- Swagger: http://localhost:4000/api/docs in development. In production, set `SWAGGER_ENABLED=true` on the API and redeploy. The docs are then at `https://<api-host>/api/docs`. Set it back to `false` when you are finished. The page lists routes. It does not bypass sign-in.
 
 ## First platform owner
 

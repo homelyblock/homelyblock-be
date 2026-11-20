@@ -4,6 +4,7 @@ import { THROTTLE_LIMIT, THROTTLE_TTL_MS } from './throttler.config.js';
 describe('configureApp security defaults', () => {
   it('disables Swagger in production unless explicitly overridden', () => {
     expect(isSwaggerEnabled('production')).toBe(false);
+    expect(isSwaggerEnabled('production', {}, true)).toBe(true);
     expect(isSwaggerEnabled('production', { swagger: true })).toBe(true);
     expect(isSwaggerEnabled('development')).toBe(true);
     expect(isSwaggerEnabled('test')).toBe(true);

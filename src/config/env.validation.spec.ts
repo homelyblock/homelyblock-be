@@ -136,7 +136,26 @@ describe('readAppConfig', () => {
     });
     expect(config.nodeEnv).toBe('production');
     expect(config.signupIntentSecret).toBe('signup-intent-secret');
+    expect(config.swaggerEnabled).toBe(false);
     expect(config.supportEmail).toBeUndefined();
+
+    expect(
+      readAppConfig({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://user:password@db.example:5432/livingspace',
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_ANON_KEY: 'anon',
+        CORS_ORIGINS: 'https://app.example.com',
+        SIGNUP_INTENT_SECRET: 'signup-intent-secret',
+        SWAGGER_ENABLED: 'true',
+      }).swaggerEnabled,
+    ).toBe(true);
+
+    expect(() =>
+      readAppConfig({
+        SWAGGER_ENABLED: 'yes',
+      }),
+    ).toThrow(/SWAGGER_ENABLED/);
   });
 
   it('requires the contact mail settings as a complete set', () => {

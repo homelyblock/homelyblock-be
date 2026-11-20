@@ -25,8 +25,15 @@ type ConfigureAppOptions = {
 export function isSwaggerEnabled(
   nodeEnv: AppConfig['nodeEnv'],
   options: ConfigureAppOptions = {},
+  swaggerEnabled = false,
 ): boolean {
-  return options.swagger ?? nodeEnv !== 'production';
+  if (options.swagger !== undefined) {
+    return options.swagger;
+  }
+  if (nodeEnv !== 'production') {
+    return true;
+  }
+  return swaggerEnabled;
 }
 
 export function resolveAppConfig(app: INestApplication): AppConfig {
@@ -45,6 +52,7 @@ export function resolveAppConfig(app: INestApplication): AppConfig {
     SUPABASE_JWT_SECRET: configService.get('SUPABASE_JWT_SECRET'),
     SUPABASE_JWKS_URL: configService.get('SUPABASE_JWKS_URL'),
     SIGNUP_INTENT_SECRET: configService.get('SIGNUP_INTENT_SECRET'),
+    SWAGGER_ENABLED: configService.get('SWAGGER_ENABLED'),
   });
 }
 
@@ -53,7 +61,11 @@ export function configureApp(
   options: ConfigureAppOptions = {},
 ): AppConfig {
   const config = resolveAppConfig(app);
-  const enableSwagger = isSwaggerEnabled(config.nodeEnv, options);
+  const enableSwagger = isSwaggerEnabled(
+    config.nodeEnv,
+    options,
+    config.swaggerEnabled,
+  );
 
   if (config.trustedProxyHops > 0) {
     (
@@ -64,7 +76,9 @@ export function configureApp(
   }
   app.use(
     helmet({
-      contentSecurityPolicy: config.nodeEnv === 'production' ? undefined : false,
+      // Swagger UI needs inline scripts. Keep the production policy when docs are off.
+      contentSecurityPolicy:
+        enableSwagger || config.nodeEnv !== 'production' ? false : undefined,
     }),
   );
   app.useGlobalPipes(

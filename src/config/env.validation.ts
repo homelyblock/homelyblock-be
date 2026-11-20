@@ -21,6 +21,8 @@ export type AppConfig = {
    * so client-supplied X-Forwarded-For is ignored.
    */
   trustedProxyHops: number;
+  /** Production Swagger stays off unless this is explicitly true. */
+  swaggerEnabled: boolean;
 };
 
 const DEFAULT_NODE_ENV = 'development';
@@ -48,6 +50,7 @@ export function readAppConfig(env: Record<string, unknown>): AppConfig {
   const mailFrom = optionalEmail('MAIL_FROM', env.MAIL_FROM);
   const resendApiKey = optionalString(env.RESEND_API_KEY);
   const trustedProxyHops = parseTrustedProxyHops(env.TRUSTED_PROXY_HOPS);
+  const swaggerEnabled = parseSwaggerEnabled(env.SWAGGER_ENABLED);
   invitationTtlDays(env.INVITATION_TTL_DAYS);
   assertMailConfig(supportEmail, mailFrom, resendApiKey);
 
@@ -114,6 +117,7 @@ export function readAppConfig(env: Record<string, unknown>): AppConfig {
     mailFrom,
     resendApiKey,
     trustedProxyHops,
+    swaggerEnabled,
   };
 }
 
@@ -142,6 +146,20 @@ function optionalString(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function parseSwaggerEnabled(value: unknown): boolean {
+  const raw = optionalString(value);
+  if (!raw) {
+    return false;
+  }
+  if (raw === 'true') {
+    return true;
+  }
+  if (raw === 'false') {
+    return false;
+  }
+  throw new Error('SWAGGER_ENABLED must be true or false');
 }
 
 function parseNodeEnv(value: unknown): 'development' | 'test' | 'production' {
