@@ -1,3 +1,5 @@
+import { invitationTtlDays } from '../memberships/invitation-policy.js';
+
 export type AppConfig = {
   nodeEnv: 'development' | 'test' | 'production';
   port: number;
@@ -14,6 +16,11 @@ export type AppConfig = {
   supportEmail?: string;
   mailFrom?: string;
   resendApiKey?: string;
+  /**
+   * Number of reverse proxies Express may trust. 0 leaves `trust proxy` off,
+   * so client-supplied X-Forwarded-For is ignored.
+   */
+  trustedProxyHops: number;
 };
 
 const DEFAULT_NODE_ENV = 'development';
@@ -40,6 +47,8 @@ export function readAppConfig(env: Record<string, unknown>): AppConfig {
   const supportEmail = optionalEmail('SUPPORT_EMAIL', env.SUPPORT_EMAIL);
   const mailFrom = optionalEmail('MAIL_FROM', env.MAIL_FROM);
   const resendApiKey = optionalString(env.RESEND_API_KEY);
+  const trustedProxyHops = parseTrustedProxyHops(env.TRUSTED_PROXY_HOPS);
+  invitationTtlDays(env.INVITATION_TTL_DAYS);
   assertMailConfig(supportEmail, mailFrom, resendApiKey);
 
   if (Boolean(supabaseUrl) !== Boolean(supabaseAnonKey)) {
@@ -104,6 +113,7 @@ export function readAppConfig(env: Record<string, unknown>): AppConfig {
     supportEmail,
     mailFrom,
     resendApiKey,
+    trustedProxyHops,
   };
 }
 
@@ -260,6 +270,21 @@ function assertMailConfig(
   if (resendApiKey && resendApiKey.length < 8) {
     throw new Error('RESEND_API_KEY is too short');
   }
+}
+
+function parseTrustedProxyHops(value: unknown): number {
+  const raw = optionalString(value);
+  if (!raw || raw === '0') return 0;
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(
+      'TRUSTED_PROXY_HOPS must be a whole number. Use 0 unless the process is reachable only through a known reverse proxy.',
+    );
+  }
+  const hops = Number(raw);
+  if (hops < 0 || hops > 5) {
+    throw new Error('TRUSTED_PROXY_HOPS must be from 0 to 5');
+  }
+  return hops;
 }
 
 function parseUrl(name: string, value: string): URL {

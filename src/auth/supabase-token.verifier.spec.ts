@@ -57,8 +57,22 @@ describe('SupabaseTokenVerifier', () => {
     await expect(verifier.verify(token)).resolves.toMatchObject({
       sub: '11111111-1111-1111-1111-111111111111',
       email: 'resident@example.com',
+      emailVerified: false,
       displayName: 'Resident One',
       role: 'authenticated',
+    });
+  });
+
+  it('reads a verified-email claim', async () => {
+    const verifier = createVerifier();
+    const token = await signToken({
+      sub: '11111111-1111-1111-1111-111111111111',
+      email: 'resident@example.com',
+      email_verified: true,
+    });
+
+    await expect(verifier.verify(token)).resolves.toMatchObject({
+      emailVerified: true,
     });
   });
 

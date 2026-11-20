@@ -99,9 +99,24 @@ export class SupabaseTokenVerifier implements TokenVerifier {
     return {
       sub: payload.sub,
       email: typeof payload.email === 'string' ? payload.email : undefined,
+      emailVerified: readEmailVerified(payload),
       displayName: displayNameCandidate.trim() || 'HomelyBlock user',
       role: typeof payload.role === 'string' ? payload.role : undefined,
       expiresAt: typeof payload.exp === 'number' ? payload.exp : undefined,
     };
   }
+}
+
+function readEmailVerified(payload: JWTPayload): boolean {
+  if (payload.email_verified === true) return true;
+  const metadata = payload.user_metadata;
+  if (
+    typeof metadata === 'object' &&
+    metadata !== null &&
+    'email_verified' in metadata &&
+    metadata.email_verified === true
+  ) {
+    return true;
+  }
+  return false;
 }

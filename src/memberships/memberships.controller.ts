@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -20,6 +21,7 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AuthorizationGuard } from '../authorization/authorization.guard.js';
 import { CreateMembershipDto } from './dto/create-membership.dto.js';
+import { ListMembershipsQueryDto } from './dto/list-memberships-query.dto.js';
 import { UpdateMembershipDto } from './dto/update-membership.dto.js';
 import { MembershipsService } from './memberships.service.js';
 
@@ -39,9 +41,10 @@ export class MembershipsController {
   async list(
     @CurrentUser() user: AuthenticatedUser,
     @Param('societyId', ParseUUIDPipe) societyId: string,
+    @Query() query: ListMembershipsQueryDto,
   ) {
-    const items = await this.membershipsService.list(user, societyId);
-    return { data: { items } };
+    const page = await this.membershipsService.list(user, societyId, query);
+    return { data: page };
   }
 
   @Post('societies/:societyId/members')

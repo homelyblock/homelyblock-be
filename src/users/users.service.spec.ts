@@ -56,7 +56,14 @@ describe('UsersService.searchProfiles', () => {
             {
               AND: [
                 expect.objectContaining({ OR: expect.any(Array) }),
-                { memberships: { some: { societyId } } },
+                {
+                  memberships: {
+                    some: {
+                      societyId,
+                      status: { in: ['INVITED', 'ACTIVE'] },
+                    },
+                  },
+                },
               ],
             },
           ],
@@ -82,7 +89,14 @@ describe('UsersService.searchProfiles', () => {
             {
               AND: [
                 expect.objectContaining({ OR: expect.any(Array) }),
-                { memberships: { some: { societyId } } },
+                {
+                  memberships: {
+                    some: {
+                      societyId,
+                      status: { in: ['INVITED', 'ACTIVE'] },
+                    },
+                  },
+                },
               ],
             },
             {

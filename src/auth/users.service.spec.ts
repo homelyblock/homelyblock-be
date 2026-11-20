@@ -400,6 +400,7 @@ describe('UsersService.ensureProfile', () => {
     const result = await service.ensureProfile({
       sub: '44444444-4444-4444-8444-444444444444',
       email: 'Anita@example.com',
+      emailVerified: true,
       displayName: 'Anita Desai',
     });
 
@@ -414,10 +415,26 @@ describe('UsersService.ensureProfile', () => {
     const result = await service.ensureProfile({
       sub: stored.id,
       email: 'anita@example.com',
+      emailVerified: true,
       displayName: 'Anita Desai',
     });
 
     expect(result.email).toBe('old@example.com');
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('does not adopt another profile when the email is not verified', async () => {
+    findUnique.mockResolvedValue(null);
+    findFirst.mockResolvedValue(stored);
+
+    await expect(
+      service.ensureProfile({
+        sub: '44444444-4444-4444-8444-444444444444',
+        email: 'anita@example.com',
+        emailVerified: false,
+        displayName: 'Anita Desai',
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(create).not.toHaveBeenCalled();
   });
 });

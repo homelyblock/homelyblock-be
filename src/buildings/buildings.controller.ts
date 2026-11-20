@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -21,6 +22,7 @@ import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AuthorizationGuard } from '../authorization/authorization.guard.js';
 import { BuildingsService } from './buildings.service.js';
 import { CreateBuildingDto } from './dto/create-building.dto.js';
+import { ListBuildingsQueryDto } from './dto/list-buildings-query.dto.js';
 import { UpdateBuildingDto } from './dto/update-building.dto.js';
 
 @ApiTags('buildings')
@@ -38,9 +40,10 @@ export class BuildingsController {
   async list(
     @CurrentUser() user: AuthenticatedUser,
     @Param('societyId', ParseUUIDPipe) societyId: string,
+    @Query() query: ListBuildingsQueryDto,
   ) {
-    const items = await this.buildingsService.list(user, societyId);
-    return { data: { items } };
+    const page = await this.buildingsService.list(user, societyId, query);
+    return { data: page };
   }
 
   @Post()

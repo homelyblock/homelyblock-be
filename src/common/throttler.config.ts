@@ -4,10 +4,11 @@ import { ThrottlerModule } from '@nestjs/throttler';
  * Global request throttling for abuse-prone routes.
  * Auth still relies on JWT verification; this only limits request volume.
  *
- * Tracker key uses Express `req.ip`. Because `trust proxy` is not enabled in
- * configureApp, client-supplied `X-Forwarded-For` is ignored. Behind a reverse
- * proxy, all clients may share the proxy IP for throttling — safer for a pilot
- * than trusting spoofable forwarded headers.
+ * Tracker key uses Express `req.ip`. `trust proxy` stays off unless
+ * TRUSTED_PROXY_HOPS is set, so client-supplied `X-Forwarded-For` is ignored.
+ * Behind one reverse proxy, set TRUSTED_PROXY_HOPS=1 only when the API cannot
+ * be reached except through that proxy. Otherwise every client shares the
+ * proxy address, which is safer than trusting a spoofed header.
  */
 export const THROTTLE_TTL_MS = 60_000;
 export const THROTTLE_LIMIT = 120;

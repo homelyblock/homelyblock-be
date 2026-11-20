@@ -14,7 +14,6 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
-  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard.js';
@@ -22,6 +21,7 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AuthorizationGuard } from '../authorization/authorization.guard.js';
 import { CreateUnitDto } from './dto/create-unit.dto.js';
+import { ListUnitsQueryDto } from './dto/list-units-query.dto.js';
 import { UpdateUnitDto } from './dto/update-unit.dto.js';
 import { UnitsService } from './units.service.js';
 
@@ -36,20 +36,14 @@ export class UnitsController {
   @ApiOperation({
     summary: 'List units in a society (active society admins and platform owners)',
   })
-  @ApiQuery({ name: 'buildingId', required: false })
   @ApiOkResponse({ description: 'Unit list' })
   async list(
     @CurrentUser() user: AuthenticatedUser,
     @Param('societyId', ParseUUIDPipe) societyId: string,
-    @Query('buildingId', new ParseUUIDPipe({ optional: true }))
-    buildingId?: string,
+    @Query() query: ListUnitsQueryDto,
   ) {
-    const items = await this.unitsService.listBySociety(
-      user,
-      societyId,
-      buildingId,
-    );
-    return { data: { items } };
+    const page = await this.unitsService.listBySociety(user, societyId, query);
+    return { data: page };
   }
 
   @Post()

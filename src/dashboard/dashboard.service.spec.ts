@@ -53,6 +53,7 @@ describe('DashboardService', () => {
 
   const billingGetDashboard = vi.fn();
   const billingListBills = vi.fn();
+  const billingSumOutstanding = vi.fn();
   const complaintsGetDashboard = vi.fn();
   const complaintsList = vi.fn();
   const noticesList = vi.fn();
@@ -81,6 +82,7 @@ describe('DashboardService', () => {
       billCount,
       billingGetDashboard,
       billingListBills,
+      billingSumOutstanding,
       complaintsGetDashboard,
       complaintsList,
       noticesList,
@@ -114,6 +116,7 @@ describe('DashboardService', () => {
       {
         getDashboard: billingGetDashboard,
         listBills: billingListBills,
+        sumOutstandingForUnit: billingSumOutstanding,
       } as unknown as BillingService,
       {
         getDashboard: complaintsGetDashboard,
@@ -207,6 +210,7 @@ describe('DashboardService', () => {
       limit: 50,
       total: 3,
     });
+    billingSumOutstanding.mockResolvedValue('150.00');
     complaintsList.mockResolvedValue({ items: [], page: 1, limit: 5, total: 0 });
     visitorsList
       .mockResolvedValueOnce({ items: [], page: 1, limit: 1, total: 2 })

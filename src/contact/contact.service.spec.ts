@@ -31,7 +31,10 @@ describe('ContactService', () => {
   });
 
   it('stores a valid inquiry and asks the mailer to notify', async () => {
-    await service.submit(valid);
+    await expect(service.submit(valid)).resolves.toEqual({
+      received: true,
+      emailed: false,
+    });
 
     expect(create).toHaveBeenCalledWith({
       data: {
@@ -59,7 +62,10 @@ describe('ContactService', () => {
   it('keeps a stored inquiry when notification throws', async () => {
     notifyInquiry.mockRejectedValue(new Error('network down'));
 
-    await expect(service.submit(valid)).resolves.toBeUndefined();
+    await expect(service.submit(valid)).resolves.toEqual({
+      received: true,
+      emailed: false,
+    });
     expect(create).toHaveBeenCalledOnce();
   });
 });

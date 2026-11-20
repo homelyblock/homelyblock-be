@@ -18,7 +18,7 @@ export class ContactController {
   })
   @ApiOkResponse({ description: 'The message was accepted' })
   async create(@Body() body: CreateContactInquiryDto) {
-    await this.contactService.submit(body);
-    return { data: { received: true } };
+    const result = await this.contactService.submit(body);
+    return { data: result };
   }
 }

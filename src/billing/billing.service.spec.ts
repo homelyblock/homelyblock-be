@@ -16,7 +16,7 @@ import {
   Prisma,
 } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { BillingService } from './billing.service.js';
+import { BillingService, isOpenBillConflict } from './billing.service.js';
 
 describe('BillingService', () => {
   const societyId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -85,6 +85,29 @@ describe('BillingService', () => {
     }
     auditCreate.mockResolvedValue({});
     billUpdateMany.mockResolvedValue({ count: 0 });
+    transaction.mockImplementation(async (work: unknown) => {
+      if (typeof work !== 'function') return work;
+      return work({
+        maintenanceConfiguration: {
+          create: configCreate,
+          update: configUpdate,
+        },
+        maintenanceBill: {
+          updateMany: billUpdateMany,
+          update: billUpdate,
+          findUnique: billFindUnique,
+          findUniqueOrThrow: billFindUnique,
+        },
+        maintenancePayment: {
+          create: paymentCreate,
+          updateMany: paymentUpdate,
+          findUniqueOrThrow: paymentFindUnique,
+        },
+        auditLog: { create: auditCreate },
+        $executeRaw: vi.fn(),
+        $queryRaw: vi.fn(),
+      });
+    });
 
     service = new BillingService(
       {
@@ -277,5 +300,36 @@ describe('BillingService', () => {
         dueDayOfMonth: 5,
       }),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('rolls back a publish when the audit row cannot be written', async () => {
+    billFindUnique.mockResolvedValue({
+      id: billId,
+      societyId,
+      status: MaintenanceBillStatus.DRAFT,
+      unit: { unitNumber: '101' },
+      building: { code: 'A' },
+      lineItems: [],
+    });
+    billUpdateMany.mockResolvedValue({ count: 1 });
+    auditCreate.mockRejectedValue(new Error('audit down'));
+
+    await expect(service.publishBill(admin, billId)).rejects.toThrow('audit down');
+    expect(transaction).toHaveBeenCalled();
+    expect(billUpdateMany).toHaveBeenCalledWith({
+      where: { id: billId, status: MaintenanceBillStatus.DRAFT },
+      data: { status: MaintenanceBillStatus.PUBLISHED },
+    });
+    expect(auditCreate).toHaveBeenCalled();
+  });
+
+  it('treats only the open-period unique index as an existing bill', () => {
+    expect(isOpenBillConflict(['openPeriodKey'])).toBe(true);
+    expect(isOpenBillConflict('maintenance_bills_unit_period_open_key')).toBe(
+      true,
+    );
+    expect(
+      isOpenBillConflict(['societyId', 'invoiceNumber']),
+    ).toBe(false);
   });
 });

@@ -300,5 +300,111 @@ describe(
         buildings.getById(owner, societyBId, buildingAId),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
+
+    it('pages society buildings without mixing another society', async () => {
+      await buildings.create(adminA, societyAId, { name: 'Wing B', code: 'B' });
+      await buildings.create(adminA, societyAId, { name: 'Wing C', code: 'C' });
+      const first = await buildings.list(adminA, societyAId, { page: 1, limit: 2 });
+      const second = await buildings.list(adminA, societyAId, { page: 2, limit: 2 });
+      expect(first.total).toBeGreaterThanOrEqual(3);
+      expect(first.items).toHaveLength(2);
+      expect(first.items.map((item) => item.code)).toEqual(['A', 'B']);
+      const seen = new Set(
+        [...first.items, ...second.items].map((item) => item.id),
+      );
+      expect(seen.size).toBe(first.items.length + second.items.length);
+      const other = await buildings.list(adminB, societyBId, { limit: 50 });
+      expect(other.items.every((item) => item.societyId === societyBId)).toBe(
+        true,
+      );
+    });
+
+    it('rejects a unit tied to a building in another society', async () => {
+      const foreign = await prisma.building.findFirstOrThrow({
+        where: { societyId: societyBId },
+      });
+      await expect(
+        prisma.unit.create({
+          data: {
+            societyId: societyAId,
+            buildingId: foreign.id,
+            unitNumber: 'X-1',
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'P2003' });
+    });
+
+    it('expires, blocks, reissues, and activates one membership', async () => {
+      const inviteeId = randomUUID();
+      await prisma.userProfile.create({
+        data: {
+          id: inviteeId,
+          displayName: 'Invitee',
+          email: `invitee-${inviteeId}@example.com`,
+        },
+      });
+      const invited = await memberships.create(adminA, societyAId, {
+        userId: inviteeId,
+        role: MembershipRole.RESIDENT_USER,
+        primaryUnitId: unitAId,
+      });
+      expect(invited.invitationState).toBe('PENDING');
+      expect(invited.status).toBe(MembershipStatus.INVITED);
+
+      await prisma.societyMembership.update({
+        where: { id: invited.id },
+        data: { invitationExpiresAt: new Date('2020-01-01T00:00:00.000Z') },
+      });
+      await expect(
+        memberships.update(adminA, invited.id, {
+          status: MembershipStatus.ACTIVE,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      await expect(
+        memberships.create(adminA, societyAId, {
+          userId: inviteeId,
+          role: MembershipRole.RESIDENT_USER,
+        }),
+      ).resolves.toMatchObject({
+        id: invited.id,
+        invitationState: 'PENDING',
+        status: MembershipStatus.INVITED,
+      });
+
+      await expect(
+        memberships.create(adminA, societyAId, {
+          userId: inviteeId,
+          role: MembershipRole.SOCIETY_ADMIN,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      const active = await memberships.update(adminA, invited.id, {
+        status: MembershipStatus.ACTIVE,
+      });
+      expect(active.status).toBe(MembershipStatus.ACTIVE);
+      expect(active.invitationState).toBe('ACTIVE');
+
+      await expect(
+        memberships.update(adminA, invited.id, { reissue: true }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('keeps the SQL checks and cross-society foreign keys', async () => {
+      const rows = await prisma.$queryRaw<Array<{ conname: string }>>`
+        SELECT conname
+        FROM pg_constraint
+        WHERE conname IN (
+          'signup_intents_choice_check',
+          'contact_inquiries_privacy_check',
+          'contact_inquiries_length_check',
+          'units_building_id_society_id_fkey',
+          'society_memberships_primary_unit_id_society_id_fkey',
+          'maintenance_bills_config_id_society_id_fkey',
+          'notices_target_unit_id_society_id_fkey'
+        )
+      `;
+      expect(rows).toHaveLength(7);
+    });
   },
 );

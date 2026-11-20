@@ -251,19 +251,25 @@ describe('VisitorsService', () => {
   });
 
   it('enforces check-in and check-out transitions', async () => {
-    visitorFindUnique.mockResolvedValue({
-      ...baseVisitor,
-      status: VisitorStatus.APPROVED,
-    });
-    visitorUpdate.mockResolvedValue({
-      ...baseVisitor,
-      status: VisitorStatus.CHECKED_IN,
-      checkedInAt: new Date(),
-    });
+    visitorUpdateMany.mockResolvedValue({ count: 1 });
+    visitorFindUnique
+      .mockResolvedValueOnce({
+        ...baseVisitor,
+        status: VisitorStatus.APPROVED,
+      })
+      .mockResolvedValueOnce({
+        ...baseVisitor,
+        status: VisitorStatus.CHECKED_IN,
+        checkedInAt: new Date(),
+      });
 
     await service.checkIn(admin, visitorId);
-    expect(visitorUpdate).toHaveBeenCalledWith(
+    expect(visitorUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: expect.objectContaining({
+          id: visitorId,
+          status: VisitorStatus.APPROVED,
+        }),
         data: expect.objectContaining({
           status: VisitorStatus.CHECKED_IN,
         }),

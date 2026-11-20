@@ -7,8 +7,14 @@ import {
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AuthorizationService } from '../authorization/authorization.service.js';
 import { Prisma } from '../generated/prisma/client.js';
+import {
+  pageWindow,
+  searchTerm,
+  type PageResult,
+} from '../common/dto/page-query.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateBuildingDto } from './dto/create-building.dto.js';
+import type { ListBuildingsQueryDto } from './dto/list-buildings-query.dto.js';
 import type { UpdateBuildingDto } from './dto/update-building.dto.js';
 
 export type BuildingDto = {
@@ -30,13 +36,32 @@ export class BuildingsService {
   async list(
     user: AuthenticatedUser,
     societyId: string,
-  ): Promise<BuildingDto[]> {
+    query: ListBuildingsQueryDto = {},
+  ): Promise<PageResult<BuildingDto>> {
     await this.authorization.assertCanAdministerSociety(user, societyId);
-    const buildings = await this.prisma.building.findMany({
-      where: { societyId },
-      orderBy: [{ code: 'asc' }, { name: 'asc' }],
-    });
-    return buildings.map(toBuildingDto);
+    const { page, limit, skip } = pageWindow(query);
+    const term = searchTerm(query.q);
+    const where: Prisma.BuildingWhereInput = {
+      societyId,
+      ...(term
+        ? {
+            OR: [
+              { name: { contains: term, mode: 'insensitive' } },
+              { code: { contains: term, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+    const [total, buildings] = await Promise.all([
+      this.prisma.building.count({ where }),
+      this.prisma.building.findMany({
+        where,
+        orderBy: [{ code: 'asc' }, { name: 'asc' }, { id: 'asc' }],
+        skip,
+        take: limit,
+      }),
+    ]);
+    return { items: buildings.map(toBuildingDto), page, limit, total };
   }
 
   async create(

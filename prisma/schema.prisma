@@ -1,6 +1,11 @@
 // LivingSpace MVP schema.
 // Connection URL comes from prisma.config.ts (DATABASE_URL).
 // Keep this file aligned with Documents/DATABASE.md.
+//
+// PostgreSQL CHECK constraints and a few composite foreign keys cannot be
+// represented here (Prisma rejects mixed-nullability composite relations).
+// They are created in SQL migrations and listed in
+// src/prisma/managed-integrity.ts. Do not drop those names in a later migration.
 
 generator client {
   provider = "prisma-client"
@@ -260,6 +265,7 @@ model Building {
   complaints                Complaint[]
 
   @@unique([societyId, code])
+  @@unique([id, societyId])
   @@index([societyId])
   @@map("buildings")
 }
@@ -274,7 +280,7 @@ model Unit {
   updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   society                   Society                   @relation(fields: [societyId], references: [id], onDelete: Restrict)
-  building                  Building                  @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  building                  Building                  @relation(fields: [buildingId, societyId], references: [id, societyId], onDelete: Restrict)
   primaryForMemberships     SocietyMembership[]
   notices                   Notice[]
   visitors                  Visitor[]
@@ -283,6 +289,8 @@ model Unit {
   complaints                Complaint[]
 
   @@unique([buildingId, unitNumber])
+  @@unique([id, societyId])
+  @@unique([id, buildingId, societyId])
   @@index([societyId, status])
   @@map("units")
 }
@@ -294,11 +302,18 @@ model SocietyMembership {
   role          MembershipRole
   status        MembershipStatus @default(INVITED)
   primaryUnitId String?          @map("primary_unit_id") @db.Uuid
+  /// Set when the membership is invited or reissued. Active rows keep the last invite time.
+  invitedAt     DateTime?        @map("invited_at") @db.Timestamptz(6)
+  /// Acceptance deadline while status is INVITED. Null on rows that were never invited.
+  invitationExpiresAt DateTime?  @map("invitation_expires_at") @db.Timestamptz(6)
   createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   society          Society           @relation(fields: [societyId], references: [id], onDelete: Restrict)
   user             UserProfile       @relation(fields: [userId], references: [id], onDelete: Restrict)
+  /// Composite society ownership is enforced in SQL
+  /// (society_memberships_primary_unit_id_society_id_fkey). Prisma cannot model
+  /// that mixed-nullability key; do not replace it with a single-column foreign key.
   primaryUnit      Unit?             @relation(fields: [primaryUnitId], references: [id], onDelete: SetNull)
   householdMembers HouseholdMember[]
 
@@ -306,6 +321,7 @@ model SocietyMembership {
   @@index([societyId, status])
   @@index([userId, status])
   @@index([societyId, primaryUnitId])
+  @@index([status, invitationExpiresAt])
   @@map("society_memberships")
 }
 
@@ -318,6 +334,8 @@ model HouseholdMember {
   phone          String?
   email          String?
   isActive       Boolean               @default(true) @map("is_active")
+  /// Set while the member is active so concurrent creates cannot share a name.
+  activeNameKey  String?               @unique @map("active_name_key")
   createdByUserId String               @map("created_by_user_id") @db.Uuid
   createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -346,7 +364,9 @@ model Notice {
 
   society        Society      @relation(fields: [societyId], references: [id], onDelete: Restrict)
   createdBy      UserProfile  @relation("NoticeAuthor", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  /// Society match is enforced by notices_target_building_id_society_id_fkey.
   targetBuilding Building?    @relation(fields: [targetBuildingId], references: [id], onDelete: Restrict)
+  /// Society match is enforced by notices_target_unit_id_society_id_fkey.
   targetUnit     Unit?        @relation(fields: [targetUnitId], references: [id], onDelete: Restrict)
   reads          NoticeRead[]
 
@@ -392,8 +412,8 @@ model Visitor {
   updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   society    Society      @relation(fields: [societyId], references: [id], onDelete: Restrict)
-  building   Building     @relation(fields: [buildingId], references: [id], onDelete: Restrict)
-  unit       Unit         @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  building   Building     @relation(fields: [buildingId, societyId], references: [id, societyId], onDelete: Restrict)
+  unit       Unit         @relation(fields: [unitId, buildingId, societyId], references: [id, buildingId, societyId], onDelete: Restrict)
   createdBy  UserProfile  @relation("VisitorCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   decisionBy UserProfile? @relation("VisitorDecider", fields: [decisionByUserId], references: [id], onDelete: SetNull)
 
@@ -423,10 +443,13 @@ model MaintenanceConfiguration {
   updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   society        Society           @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  /// Society match is enforced by maintenance_configurations_target_building_id_society_id_fkey.
   targetBuilding Building?         @relation(fields: [targetBuildingId], references: [id], onDelete: Restrict)
+  /// Society match is enforced by maintenance_configurations_target_unit_id_society_id_fkey.
   targetUnit     Unit?             @relation(fields: [targetUnitId], references: [id], onDelete: Restrict)
   bills          MaintenanceBill[]
 
+  @@unique([id, societyId])
   @@index([societyId, status])
   @@map("maintenance_configurations")
 }
@@ -452,18 +475,23 @@ model MaintenanceBill {
   paidAmount       Decimal               @default(0) @map("paid_amount") @db.Decimal(12, 2)
   outstandingAmount Decimal              @map("outstanding_amount") @db.Decimal(12, 2)
   status           MaintenanceBillStatus @default(DRAFT)
+  /// `${unitId}:${year}:${month}` while the bill is not cancelled. Null when cancelled.
+  openPeriodKey    String?               @unique @map("open_period_key")
   createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   society    Society                 @relation(fields: [societyId], references: [id], onDelete: Restrict)
-  building   Building                @relation(fields: [buildingId], references: [id], onDelete: Restrict)
-  unit       Unit                    @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  building   Building                @relation(fields: [buildingId, societyId], references: [id, societyId], onDelete: Restrict)
+  unit       Unit                    @relation(fields: [unitId, buildingId, societyId], references: [id, buildingId, societyId], onDelete: Restrict)
+  /// Society match is enforced by maintenance_bills_config_id_society_id_fkey.
+  /// Deleting a configuration that still has bills is restricted.
   config     MaintenanceConfiguration? @relation(fields: [configId], references: [id], onDelete: SetNull)
   billedUser UserProfile?            @relation("BillBilledUser", fields: [billedUserId], references: [id], onDelete: SetNull)
   lineItems  MaintenanceBillLineItem[]
   payments   MaintenancePayment[]
 
   @@unique([societyId, invoiceNumber])
+  @@unique([id, societyId])
   @@index([societyId, status, dueDate])
   @@index([societyId, periodYear, periodMonth])
   @@index([unitId, periodYear, periodMonth])
@@ -505,7 +533,7 @@ model MaintenancePayment {
   updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   society    Society      @relation(fields: [societyId], references: [id], onDelete: Restrict)
-  bill       MaintenanceBill @relation(fields: [billId], references: [id], onDelete: Restrict)
+  bill       MaintenanceBill @relation(fields: [billId, societyId], references: [id, societyId], onDelete: Restrict)
   recordedBy UserProfile  @relation("PaymentRecorder", fields: [recordedByUserId], references: [id], onDelete: Restrict)
   reversedBy UserProfile? @relation("PaymentReverser", fields: [reversedByUserId], references: [id], onDelete: SetNull)
 
@@ -534,8 +562,8 @@ model Complaint {
   updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   society      Society                  @relation(fields: [societyId], references: [id], onDelete: Restrict)
-  building     Building                 @relation(fields: [buildingId], references: [id], onDelete: Restrict)
-  unit         Unit                     @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  building     Building                 @relation(fields: [buildingId, societyId], references: [id, societyId], onDelete: Restrict)
+  unit         Unit                     @relation(fields: [unitId, buildingId, societyId], references: [id, buildingId, societyId], onDelete: Restrict)
   createdBy    UserProfile              @relation("ComplaintCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   assignedTo   UserProfile?             @relation("ComplaintAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
   statusHistory ComplaintStatusHistory[]

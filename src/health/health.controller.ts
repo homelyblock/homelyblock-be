@@ -4,12 +4,12 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { HealthService } from './health.service.js';
 
 @ApiTags('health')
-@SkipThrottle()
 @Controller('health')
 export class HealthController {
   constructor(private readonly healthService: HealthService) {}
 
   @Get()
+  @SkipThrottle()
   @ApiOperation({ summary: 'Application health' })
   @ApiOkResponse({
     description: 'Reports that the NestJS process is running',
@@ -32,6 +32,7 @@ export class HealthController {
   }
 
   @Get('ready')
+  @SkipThrottle()
   @ApiOperation({
     summary: 'Readiness, including a database connectivity check',
   })

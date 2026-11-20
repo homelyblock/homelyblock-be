@@ -212,7 +212,7 @@ describe('Dashboard PostgreSQL integration', () => {
         periodStart: new Date('2026-10-01T00:00:00.000Z'),
         periodEnd: new Date('2026-10-31T00:00:00.000Z'),
         invoiceDate: new Date('2026-10-01T00:00:00.000Z'),
-        dueDate: new Date('2026-10-10T00:00:00.000Z'),
+        dueDate: new Date(Date.UTC(2027, 11, 10)),
         baseAmount: '100.00',
         additionalAmount: '0.00',
         discountAmount: '0.00',

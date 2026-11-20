@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsIn, IsOptional, IsUUID, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsOptional, IsUUID, ValidateIf } from 'class-validator';
 import {
   MembershipRole,
   MembershipStatus,
@@ -29,4 +29,12 @@ export class UpdateMembershipDto {
   @ValidateIf((_, value) => value !== null)
   @IsUUID()
   primaryUnitId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Refresh an expired or removed invitation. Active and suspended memberships cannot be reissued.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  reissue?: boolean;
 }

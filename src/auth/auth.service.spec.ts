@@ -33,6 +33,7 @@ describe('AuthService', () => {
     const identity: VerifiedAccessToken = {
       sub: '11111111-1111-1111-1111-111111111111',
       email: 'resident@example.com',
+      emailVerified: true,
       displayName: 'Resident',
     };
     const user: AuthenticatedUser = {

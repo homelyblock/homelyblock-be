@@ -7,8 +7,14 @@ import {
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AuthorizationService } from '../authorization/authorization.service.js';
 import { Prisma, UnitStatus } from '../generated/prisma/client.js';
+import {
+  pageWindow,
+  searchTerm,
+  type PageResult,
+} from '../common/dto/page-query.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateUnitDto } from './dto/create-unit.dto.js';
+import type { ListUnitsQueryDto } from './dto/list-units-query.dto.js';
 import type { UpdateUnitDto } from './dto/update-unit.dto.js';
 
 export type UnitDto = {
@@ -31,17 +37,29 @@ export class UnitsService {
   async listBySociety(
     user: AuthenticatedUser,
     societyId: string,
-    buildingId?: string,
-  ): Promise<UnitDto[]> {
+    query: ListUnitsQueryDto = {},
+  ): Promise<PageResult<UnitDto>> {
     await this.authorization.assertCanAdministerSociety(user, societyId);
-    const units = await this.prisma.unit.findMany({
-      where: {
-        societyId,
-        ...(buildingId ? { buildingId } : {}),
-      },
-      orderBy: [{ buildingId: 'asc' }, { unitNumber: 'asc' }],
-    });
-    return units.map(toUnitDto);
+    const { page, limit, skip } = pageWindow(query);
+    const term = searchTerm(query.q);
+    const where: Prisma.UnitWhereInput = {
+      societyId,
+      ...(query.buildingId ? { buildingId: query.buildingId } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(term
+        ? { unitNumber: { contains: term, mode: 'insensitive' } }
+        : {}),
+    };
+    const [total, units] = await Promise.all([
+      this.prisma.unit.count({ where }),
+      this.prisma.unit.findMany({
+        where,
+        orderBy: [{ buildingId: 'asc' }, { unitNumber: 'asc' }, { id: 'asc' }],
+        skip,
+        take: limit,
+      }),
+    ]);
+    return { items: units.map(toUnitDto), page, limit, total };
   }
 
   async create(

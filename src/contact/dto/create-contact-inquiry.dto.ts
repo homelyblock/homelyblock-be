@@ -58,6 +58,7 @@ export class CreateContactInquiryDto {
   societyName?: string;
 
   @ApiProperty({ description: 'Must be true. The sender confirms they have read the privacy policy.' })
+  @Transform(({ value }) => value === true)
   @Equals(true)
   privacyAcknowledged!: boolean;
 

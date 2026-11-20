@@ -33,10 +33,12 @@ describe('MembershipsService', () => {
   const assertKeepsActiveSocietyAdmin = vi.fn();
   const profileFindUnique = vi.fn();
   const membershipFindMany = vi.fn();
+  const membershipCount = vi.fn();
   const membershipFindFirst = vi.fn();
   const membershipFindUnique = vi.fn();
   const membershipCreate = vi.fn();
   const membershipUpdate = vi.fn();
+  const membershipUpdateMany = vi.fn();
   const unitFindFirst = vi.fn();
   const auditCreate = vi.fn();
 
@@ -47,10 +49,12 @@ describe('MembershipsService', () => {
     assertKeepsActiveSocietyAdmin.mockReset().mockResolvedValue(undefined);
     profileFindUnique.mockReset();
     membershipFindMany.mockReset();
+    membershipCount.mockReset().mockResolvedValue(1);
     membershipFindFirst.mockReset();
     membershipFindUnique.mockReset();
     membershipCreate.mockReset();
     membershipUpdate.mockReset();
+    membershipUpdateMany.mockReset();
     unitFindFirst.mockReset();
     auditCreate.mockReset().mockResolvedValue({});
 
@@ -59,6 +63,7 @@ describe('MembershipsService', () => {
         userProfile: { findUnique: profileFindUnique },
         societyMembership: {
           findMany: membershipFindMany,
+          count: membershipCount,
           findFirst: membershipFindFirst,
           findUnique: membershipFindUnique,
           create: membershipCreate,
@@ -68,7 +73,12 @@ describe('MembershipsService', () => {
         auditLog: { create: auditCreate },
         $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
           fn({
-            societyMembership: { update: membershipUpdate },
+            societyMembership: {
+              update: membershipUpdate,
+              updateMany: membershipUpdateMany,
+              findUnique: membershipFindUnique,
+              findUniqueOrThrow: membershipFindUnique,
+            },
             auditLog: { create: auditCreate },
           }),
       } as unknown as PrismaService,
@@ -97,12 +107,33 @@ describe('MembershipsService', () => {
     const result = await service.list(admin, societyId);
 
     expect(assertCanAdministerSociety).toHaveBeenCalledWith(admin, societyId);
-    expect(result[0]).toMatchObject({
+    expect(result.invitationTtlDays).toBeGreaterThan(0);
+    expect(result.items[0]).toMatchObject({
       displayName: 'Resident',
       email: 'r@example.com',
       role: MembershipRole.RESIDENT_USER,
       primaryUnitId: unitId,
     });
+  });
+
+  it('filters the member page by role and status inside the society', async () => {
+    membershipFindMany.mockResolvedValue([]);
+
+    await service.list(admin, societyId, {
+      role: MembershipRole.SOCIETY_ADMIN,
+      status: MembershipStatus.ACTIVE,
+      limit: 100,
+    });
+
+    expect(membershipFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          societyId,
+          role: MembershipRole.SOCIETY_ADMIN,
+          status: MembershipStatus.ACTIVE,
+        }),
+      }),
+    );
   });
 
   it('does not query members when the caller cannot administer the society', async () => {
@@ -212,6 +243,34 @@ describe('MembershipsService', () => {
       membershipId,
       { role: undefined, status: MembershipStatus.ACTIVE },
     );
+  });
+
+  it('refuses to activate an expired invitation', async () => {
+    membershipFindUnique.mockResolvedValue({
+      id: membershipId,
+      societyId,
+      userId,
+      role: MembershipRole.RESIDENT_USER,
+      status: MembershipStatus.INVITED,
+      primaryUnitId: null,
+      invitedAt: new Date('2020-01-01T00:00:00.000Z'),
+      invitationExpiresAt: new Date('2020-01-15T00:00:00.000Z'),
+      createdAt: new Date('2020-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2020-01-01T00:00:00.000Z'),
+      user: { displayName: 'Resident', email: 'r@example.com' },
+    });
+    membershipUpdateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.update(admin, membershipId, { status: MembershipStatus.ACTIVE }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    await expect(
+      service.update(admin, membershipId, { status: MembershipStatus.ACTIVE }),
+    ).rejects.toSatisfy((error: ConflictException) => {
+      expect(error.getResponse()).toMatchObject({ code: 'INVITATION_EXPIRED' });
+      return true;
+    });
+    expect(membershipUpdate).not.toHaveBeenCalled();
   });
 
   it('returns not found for missing memberships', async () => {

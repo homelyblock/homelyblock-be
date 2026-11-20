@@ -23,6 +23,7 @@ describe('BuildingsService', () => {
 
   const assertCanAdministerSociety = vi.fn();
   const findMany = vi.fn();
+  const count = vi.fn();
   const findFirst = vi.fn();
   const create = vi.fn();
   const update = vi.fn();
@@ -33,6 +34,7 @@ describe('BuildingsService', () => {
   beforeEach(() => {
     assertCanAdministerSociety.mockReset().mockResolvedValue(undefined);
     findMany.mockReset();
+    count.mockReset().mockResolvedValue(1);
     findFirst.mockReset();
     create.mockReset();
     update.mockReset();
@@ -40,7 +42,7 @@ describe('BuildingsService', () => {
 
     service = new BuildingsService(
       {
-        building: { findMany, findFirst, create, update },
+        building: { findMany, findFirst, create, update, count },
         auditLog: { create: auditCreate },
       } as unknown as PrismaService,
       {
@@ -63,7 +65,14 @@ describe('BuildingsService', () => {
 
     const result = await service.list(admin, societyId);
     expect(assertCanAdministerSociety).toHaveBeenCalledWith(admin, societyId);
-    expect(result[0]?.code).toBe('A');
+    expect(result.items[0]?.code).toBe('A');
+    expect(result.total).toBe(1);
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { societyId },
+        orderBy: [{ code: 'asc' }, { name: 'asc' }, { id: 'asc' }],
+      }),
+    );
   });
 
   it('creates a building and normalizes code', async () => {

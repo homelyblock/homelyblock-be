@@ -12,7 +12,6 @@ import { randomUUID } from 'node:crypto';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AuthorizationService } from '../authorization/authorization.service.js';
 import {
-  ComplaintCategory,
   ComplaintPriority,
   ComplaintStatus,
   MembershipRole,
@@ -208,67 +207,73 @@ export class ComplaintsService {
     societyId: string,
   ): Promise<ComplaintDashboardDto> {
     await this.authorization.assertCanAdministerSociety(user, societyId);
-    const rows = await this.prisma.complaint.findMany({
-      where: { societyId },
-      select: {
-        id: true,
-        status: true,
-        priority: true,
-        category: true,
-        createdAt: true,
-        title: true,
-        buildingId: true,
-        unitId: true,
-        societyId: true,
-        createdByUserId: true,
-        assignedToUserId: true,
-        description: true,
-        resolutionNotes: true,
-        resolvedAt: true,
-        closedAt: true,
-        updatedAt: true,
-        unit: { select: { unitNumber: true } },
-        building: { select: { code: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const where = { societyId };
+    const [byStatus, byCategory, highOrUrgent, recent] = await Promise.all([
+      this.prisma.complaint.groupBy({
+        by: ['status'],
+        where,
+        _count: { _all: true },
+      }),
+      this.prisma.complaint.groupBy({
+        by: ['category'],
+        where,
+        _count: { _all: true },
+      }),
+      this.prisma.complaint.count({
+        where: {
+          societyId,
+          priority: {
+            in: [ComplaintPriority.HIGH, ComplaintPriority.URGENT],
+          },
+        },
+      }),
+      this.prisma.complaint.findMany({
+        where,
+        select: {
+          id: true,
+          status: true,
+          priority: true,
+          category: true,
+          createdAt: true,
+          title: true,
+          buildingId: true,
+          unitId: true,
+          societyId: true,
+          createdByUserId: true,
+          assignedToUserId: true,
+          description: true,
+          resolutionNotes: true,
+          resolvedAt: true,
+          closedAt: true,
+          updatedAt: true,
+          unit: { select: { unitNumber: true } },
+          building: { select: { code: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 8,
+      }),
+    ]);
 
-    const byCategoryMap = new Map<ComplaintCategory, number>();
-    let open = 0;
-    let inProgress = 0;
-    let resolved = 0;
-    let highOrUrgent = 0;
-
-    for (const row of rows) {
-      byCategoryMap.set(row.category, (byCategoryMap.get(row.category) ?? 0) + 1);
-      if (
-        row.status === ComplaintStatus.OPEN ||
-        row.status === ComplaintStatus.ACKNOWLEDGED ||
-        row.status === ComplaintStatus.REOPENED
-      ) {
-        open += 1;
-      }
-      if (row.status === ComplaintStatus.IN_PROGRESS) inProgress += 1;
-      if (row.status === ComplaintStatus.RESOLVED) resolved += 1;
-      if (
-        row.priority === ComplaintPriority.HIGH ||
-        row.priority === ComplaintPriority.URGENT
-      ) {
-        highOrUrgent += 1;
-      }
-    }
+    const countFor = (statuses: ComplaintStatus[]) =>
+      byStatus
+        .filter((row) => statuses.includes(row.status))
+        .reduce((sum, row) => sum + row._count._all, 0);
 
     return {
-      total: rows.length,
-      open,
-      inProgress,
-      resolved,
+      total: byStatus.reduce((sum, row) => sum + row._count._all, 0),
+      open: countFor([
+        ComplaintStatus.OPEN,
+        ComplaintStatus.ACKNOWLEDGED,
+        ComplaintStatus.REOPENED,
+      ]),
+      inProgress: countFor([ComplaintStatus.IN_PROGRESS]),
+      resolved: countFor([ComplaintStatus.RESOLVED]),
       highOrUrgent,
-      byCategory: [...byCategoryMap.entries()].map(([category, count]) => ({
-        category,
-        count,
+      byCategory: byCategory.map((row) => ({
+        category: row.category,
+        count: row._count._all,
       })),
-      recent: rows.slice(0, 8).map(toComplaintDto),
+      recent: recent.map(toComplaintDto),
     };
   }
 
@@ -370,13 +375,19 @@ export class ComplaintsService {
         nextStatus = ComplaintStatus.ACKNOWLEDGED;
       }
 
-      await tx.complaint.update({
-        where: { id: complaintId },
+      const changed = await tx.complaint.updateMany({
+        where: { id: complaintId, status: complaint.status },
         data: {
           assignedToUserId: dto.assigneeUserId,
           status: nextStatus,
         },
       });
+      if (changed.count !== 1) {
+        throw new ConflictException({
+          message: 'Complaint status changed. Refresh and try again.',
+          code: 'CONFLICT',
+        });
+      }
 
       if (nextStatus !== complaint.status) {
         await tx.complaintStatusHistory.create({
@@ -614,13 +625,19 @@ export class ComplaintsService {
     extra?: Prisma.ComplaintUpdateInput,
   ): Promise<ComplaintDto> {
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.complaint.update({
-        where: { id: complaint.id },
+      const changed = await tx.complaint.updateMany({
+        where: { id: complaint.id, status: complaint.status },
         data: {
           status: toStatus,
-          ...extra,
+          ...(extra as Prisma.ComplaintUpdateManyMutationInput | undefined),
         },
       });
+      if (changed.count !== 1) {
+        throw new ConflictException({
+          message: `Cannot transition from ${complaint.status} to ${toStatus}`,
+          code: 'INVALID_TRANSITION',
+        });
+      }
       await tx.complaintStatusHistory.create({
         data: {
           complaintId: complaint.id,

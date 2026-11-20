@@ -253,11 +253,11 @@ export class VisitorsService {
       });
     }
 
-    const updated = await this.prisma.visitor.update({
-      where: { id: visitor.id },
-      data: { status: VisitorStatus.CANCELLED },
-      include: visitorIncludes,
-    });
+    const updated = await this.commitVisitorStatus(
+      visitor.id,
+      [VisitorStatus.PENDING, VisitorStatus.APPROVED],
+      { status: VisitorStatus.CANCELLED },
+    );
 
     await this.audit(
       user.id,
@@ -293,14 +293,14 @@ export class VisitorsService {
       });
     }
 
-    const updated = await this.prisma.visitor.update({
-      where: { id: visitor.id },
-      data: {
+    const updated = await this.commitVisitorStatus(
+      visitor.id,
+      VisitorStatus.APPROVED,
+      {
         status: VisitorStatus.CHECKED_IN,
         checkedInAt: new Date(),
       },
-      include: visitorIncludes,
-    });
+    );
 
     await this.audit(
       user.id,
@@ -335,14 +335,14 @@ export class VisitorsService {
       });
     }
 
-    const updated = await this.prisma.visitor.update({
-      where: { id: visitor.id },
-      data: {
+    const updated = await this.commitVisitorStatus(
+      visitor.id,
+      VisitorStatus.CHECKED_IN,
+      {
         status: VisitorStatus.CHECKED_OUT,
         checkedOutAt: new Date(),
       },
-      include: visitorIncludes,
-    });
+    );
 
     await this.audit(
       user.id,
@@ -369,9 +369,10 @@ export class VisitorsService {
       });
     }
 
-    const updated = await this.prisma.visitor.update({
-      where: { id: visitor.id },
-      data: {
+    const updated = await this.commitVisitorStatus(
+      visitor.id,
+      VisitorStatus.PENDING,
+      {
         status:
           decision === 'APPROVED'
             ? VisitorStatus.APPROVED
@@ -379,8 +380,7 @@ export class VisitorsService {
         decisionByUserId: user.id,
         decisionAt: new Date(),
       },
-      include: visitorIncludes,
-    });
+    );
 
     await this.audit(
       user.id,
@@ -571,6 +571,37 @@ export class VisitorsService {
     }
   }
 
+  private async commitVisitorStatus(
+    visitorId: string,
+    expected: VisitorStatus | VisitorStatus[],
+    data: Prisma.VisitorUncheckedUpdateManyInput,
+  ) {
+    const changed = await this.prisma.visitor.updateMany({
+      where: {
+        id: visitorId,
+        status: Array.isArray(expected) ? { in: expected } : expected,
+      },
+      data,
+    });
+    if (changed.count !== 1) {
+      throw new ConflictException({
+        message: 'Visitor status changed. Refresh and try again.',
+        code: 'CONFLICT',
+      });
+    }
+    const updated = await this.prisma.visitor.findUnique({
+      where: { id: visitorId },
+      include: visitorIncludes,
+    });
+    if (!updated) {
+      throw new NotFoundException({
+        message: 'Visitor not found',
+        code: 'NOT_FOUND',
+      });
+    }
+    return updated;
+  }
+
   private async expireDueVisitors(societyId: string): Promise<void> {
     await this.prisma.visitor.updateMany({
       where: {
@@ -594,12 +625,20 @@ export class VisitorsService {
       visitor.checkedInAt === null &&
       visitor.expectedAt.getTime() < expirationCutoff().getTime()
     ) {
-      const updated = await this.prisma.visitor.update({
-        where: { id: visitor.id },
+      const changed = await this.prisma.visitor.updateMany({
+        where: {
+          id: visitor.id,
+          status: visitor.status,
+          checkedInAt: null,
+        },
         data: { status: VisitorStatus.EXPIRED },
+      });
+      if (changed.count !== 1) return visitor;
+      const updated = await this.prisma.visitor.findUnique({
+        where: { id: visitor.id },
         include: visitorIncludes,
       });
-      return updated as unknown as T;
+      return (updated ?? visitor) as unknown as T;
     }
     return visitor;
   }

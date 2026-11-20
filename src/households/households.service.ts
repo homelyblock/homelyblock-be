@@ -142,11 +142,16 @@ export class HouseholdsService {
       );
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    let updated;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.householdMember.update({
         where: { id: existing.id },
         data: {
           ...(dto.name !== undefined ? { name: nextName } : {}),
+          activeNameKey: existing.isActive
+            ? householdActiveKey(existing.membershipId, nextName)
+            : null,
           ...(dto.relationship !== undefined
             ? { relationship: dto.relationship }
             : {}),
@@ -180,6 +185,9 @@ export class HouseholdsService {
       });
       return row;
     });
+    } catch (error) {
+      rethrowHouseholdConflict(error);
+    }
 
     return toHouseholdMemberDto(updated, existing.membership.societyId);
   }
@@ -198,7 +206,7 @@ export class HouseholdsService {
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.householdMember.update({
         where: { id: existing.id },
-        data: { isActive: false },
+        data: { isActive: false, activeNameKey: null },
       });
       await tx.auditLog.create({
         data: {
@@ -373,11 +381,14 @@ export class HouseholdsService {
     const name = dto.name.trim();
     await this.assertNoDuplicateName(membership.id, name);
 
-    const created = await this.prisma.$transaction(async (tx) => {
+    let created;
+    try {
+      created = await this.prisma.$transaction(async (tx) => {
       const row = await tx.householdMember.create({
         data: {
           membershipId: membership.id,
           name,
+          activeNameKey: householdActiveKey(membership.id, name),
           relationship: dto.relationship,
           phone: dto.phone ? normalizePhone(dto.phone) : null,
           email: dto.email ? dto.email.trim().toLowerCase() : null,
@@ -399,6 +410,9 @@ export class HouseholdsService {
       });
       return row;
     });
+    } catch (error) {
+      rethrowHouseholdConflict(error);
+    }
 
     return toHouseholdMemberDto(created, membership.societyId);
   }
@@ -507,6 +521,24 @@ export class HouseholdsService {
 
 function normalizePhone(value: string): string {
   return normalizeIndianPhone(value);
+}
+
+function householdActiveKey(membershipId: string, name: string): string {
+  return `${membershipId}:${name.trim().toLowerCase()}`;
+}
+
+function rethrowHouseholdConflict(error: unknown): never {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === 'P2002'
+  ) {
+    throw new ConflictException({
+      message:
+        'An active household member with this name already exists for this household',
+      code: 'CONFLICT',
+    });
+  }
+  throw error;
 }
 
 function toOccupancyDto(

@@ -518,4 +518,74 @@ describe('Billing PostgreSQL integration', () => {
       ConflictException,
     );
   });
+
+  it('rolls the bill back when the publish audit insert fails', async () => {
+    const generated = await billing.generateBills(admin, societyAId, {
+      configId,
+      periodYear: 2027,
+      periodMonth: 3,
+    });
+    const billId = generated.items[0]!.id;
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION hb_fail_publish_audit() RETURNS trigger
+      LANGUAGE plpgsql AS $fn$
+      BEGIN
+        IF NEW.action = 'maintenance_bill.publish' THEN
+          RAISE EXCEPTION 'forced audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $fn$;
+    `);
+    await prisma.$executeRawUnsafe(`
+      DROP TRIGGER IF EXISTS hb_fail_publish_audit ON audit_logs;
+      CREATE TRIGGER hb_fail_publish_audit
+      BEFORE INSERT ON audit_logs
+      FOR EACH ROW EXECUTE FUNCTION hb_fail_publish_audit();
+    `);
+    try {
+      await expect(billing.publishBill(admin, billId)).rejects.toThrow(
+        /forced audit failure/,
+      );
+      const stored = await prisma.maintenanceBill.findUniqueOrThrow({
+        where: { id: billId },
+      });
+      expect(stored.status).toBe(MaintenanceBillStatus.DRAFT);
+      expect(
+        await prisma.auditLog.count({
+          where: { entityId: billId, action: 'maintenance_bill.publish' },
+        }),
+      ).toBe(0);
+    } finally {
+      await prisma.$executeRawUnsafe(
+        `DROP TRIGGER IF EXISTS hb_fail_publish_audit ON audit_logs`,
+      );
+      await prisma.$executeRawUnsafe(
+        `DROP FUNCTION IF EXISTS hb_fail_publish_audit()`,
+      );
+    }
+  });
+
+  it('publishes a draft only once when two requests race', async () => {
+    const generated = await billing.generateBills(admin, societyAId, {
+      configId,
+      periodYear: 2027,
+      periodMonth: 4,
+    });
+    const billId = generated.items[0]!.id;
+    const results = await Promise.allSettled([
+      billing.publishBill(admin, billId),
+      billing.publishBill(admin, billId),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(
+      1,
+    );
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(
+      1,
+    );
+    const stored = await prisma.maintenanceBill.findUniqueOrThrow({
+      where: { id: billId },
+    });
+    expect(stored.status).toBe(MaintenanceBillStatus.PUBLISHED);
+  });
 });

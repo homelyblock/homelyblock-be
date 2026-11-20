@@ -14,10 +14,13 @@ type ConfigureAppOptions = {
 };
 
 /**
- * Express `trust proxy` is intentionally left off by default.
- * Enabling it without a carefully configured reverse proxy would let clients
- * spoof `X-Forwarded-For` and bypass Nest Throttler IP buckets.
- * Prefer shared rate limits behind a single proxy hop over trusting arbitrary headers.
+ * Express `trust proxy` stays off unless TRUSTED_PROXY_HOPS is 1–5.
+ * A numeric hop count trusts only that many proxies closest to this process.
+ * It does not trust an arbitrary client-supplied X-Forwarded-For list.
+ * Leave it at 0 when the API port is reachable directly, including local
+ * development. Set it only when every request arrives through that many proxies
+ * and each proxy appends the real peer address. Readiness stays throttled.
+ * Liveness does not.
  */
 export function isSwaggerEnabled(
   nodeEnv: AppConfig['nodeEnv'],
@@ -52,7 +55,13 @@ export function configureApp(
   const config = resolveAppConfig(app);
   const enableSwagger = isSwaggerEnabled(config.nodeEnv, options);
 
-  // Do not call app.set('trust proxy', ...). See module comment above.
+  if (config.trustedProxyHops > 0) {
+    (
+      app.getHttpAdapter().getInstance() as {
+        set: (key: string, value: number) => void;
+      }
+    ).set('trust proxy', config.trustedProxyHops);
+  }
   app.use(
     helmet({
       contentSecurityPolicy: config.nodeEnv === 'production' ? undefined : false,
@@ -64,7 +73,9 @@ export function configureApp(
       whitelist: true,
       forbidNonWhitelisted: true,
       transformOptions: {
-        enableImplicitConversion: true,
+        // Query strings must not use Boolean("false") === true.
+        // Numeric query fields declare @Type(() => Number) explicitly.
+        enableImplicitConversion: false,
       },
     }),
   );

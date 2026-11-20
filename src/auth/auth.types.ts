@@ -1,6 +1,11 @@
 export type VerifiedAccessToken = {
   sub: string;
   email?: string;
+  /**
+   * True only when the access token itself says the email is verified.
+   * Account linking must not treat a matching address as proof of ownership.
+   */
+  emailVerified: boolean;
   displayName: string;
   role?: string;
   expiresAt?: number;

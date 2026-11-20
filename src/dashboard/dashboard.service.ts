@@ -108,7 +108,9 @@ export class DashboardService {
 
     const unreadTotal = await this.countUnreadNotices(user.id, societyId);
 
-    let outstanding = money('0');
+    const outstanding = primaryUnitId
+      ? await this.billing.sumOutstandingForUnit(societyId, primaryUnitId)
+      : '0.00';
     const openBills = [];
     for (const bill of billsPage.items) {
       if (
@@ -116,7 +118,6 @@ export class DashboardService {
         bill.status === MaintenanceBillStatus.PARTIALLY_PAID ||
         bill.status === MaintenanceBillStatus.OVERDUE
       ) {
-        outstanding = outstanding.plus(money(bill.outstandingAmount));
         openBills.push({
           id: bill.id,
           invoiceNumber: bill.invoiceNumber,
@@ -198,7 +199,7 @@ export class DashboardService {
         })),
       },
       maintenance: {
-        outstandingBalance: moneyString(outstanding.toDecimalPlaces(2)),
+        outstandingBalance: outstanding,
         openBills: openBills.slice(0, 8),
         recentPayments: recentPayments.map((p) => ({
           id: p.id,

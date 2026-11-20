@@ -39,7 +39,7 @@ export class UsersService {
   async ensureProfile(
     identity: VerifiedAccessToken,
   ): Promise<AuthenticatedUser> {
-    const email = identity.email?.trim() || undefined;
+    const email = normalizeEmail(identity.email);
     const existing = await this.prisma.userProfile.findUnique({
       where: { id: identity.sub },
       select: profileIdentitySelect,
@@ -48,7 +48,7 @@ export class UsersService {
     if (existing) {
       if (
         email &&
-        existing.email?.toLowerCase() !== email.toLowerCase() &&
+        existing.email?.toLowerCase() !== email &&
         !(await this.emailTakenBySomeoneElse(email, identity.sub))
       ) {
         const updated = await this.prisma.userProfile.update({
@@ -63,8 +63,11 @@ export class UsersService {
 
     const byEmail = email ? await this.findProfileByEmail(email) : null;
     if (byEmail) {
-      // Memberships reference the stored profile id. A recreated Supabase
-      // user keeps the same verified email and a new subject.
+      // A recreated auth user may keep memberships only when the token proves
+      // the address is verified. An unverified signup must not become that user.
+      if (!identity.emailVerified) {
+        throw emailAlreadyRegistered();
+      }
       return toAuthenticatedUser(byEmail, identity);
     }
 
@@ -81,6 +84,9 @@ export class UsersService {
     } catch (error) {
       if (!isUniqueViolation(error) || !email) {
         throw error;
+      }
+      if (!identity.emailVerified) {
+        throw emailAlreadyRegistered();
       }
       const raced = await this.findProfileByEmail(email);
       if (!raced) {
@@ -150,7 +156,15 @@ export class UsersService {
                   textMatch,
                   {
                     memberships: {
-                      some: { societyId: scope.societyId },
+                      some: {
+                        societyId: scope.societyId,
+                        status: {
+                          in: [
+                            MembershipStatus.INVITED,
+                            MembershipStatus.ACTIVE,
+                          ],
+                        },
+                      },
                     },
                   },
                 ],
@@ -545,6 +559,19 @@ function toAccountType(value: string): AccountType {
   throw new BadRequestException({
     message: 'Choose a society administrator or resident account',
     code: 'BAD_REQUEST',
+  });
+}
+
+function normalizeEmail(email?: string): string | undefined {
+  const normalized = email?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function emailAlreadyRegistered(): ConflictException {
+  return new ConflictException({
+    message:
+      'An account with this email already exists. Sign in with the original account.',
+    code: 'EMAIL_ALREADY_REGISTERED',
   });
 }
 

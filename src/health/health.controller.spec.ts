@@ -32,6 +32,11 @@ describe('HealthController', () => {
     expect(queryRaw).not.toHaveBeenCalled();
   });
 
+  it('skips rate limits on liveness and readiness so probes cannot lock out users', () => {
+    expect(Reflect.getMetadata('THROTTLER:SKIPdefault', HealthController.prototype.getHealth)).toBe(true);
+    expect(Reflect.getMetadata('THROTTLER:SKIPdefault', HealthController.prototype.getReadiness)).toBe(true);
+  });
+
   it('reports ready when the database accepts a query', async () => {
     await expect(controller.getReadiness()).resolves.toEqual({
       data: { status: 'ok' },

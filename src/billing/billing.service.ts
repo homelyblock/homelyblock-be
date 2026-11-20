@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
@@ -72,6 +73,8 @@ const OPEN_BILL_STATUSES: MaintenanceBillStatus[] = [
 
 @Injectable()
 export class BillingService {
+  private readonly logger = new Logger(BillingService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly authorization: AuthorizationService,
@@ -93,24 +96,32 @@ export class BillingService {
     const additionalAmount = money(dto.additionalAmount ?? '0');
     assertNonNegative(additionalAmount, 'additionalAmount');
 
-    const config = await this.prisma.maintenanceConfiguration.create({
-      data: {
+    const config = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.maintenanceConfiguration.create({
+        data: {
+          societyId,
+          name: dto.name.trim(),
+          description: optionalTrim(dto.description),
+          monthlyAmount,
+          billingCycle: MaintenanceBillingCycle.MONTHLY,
+          dueDayOfMonth: dto.dueDayOfMonth,
+          additionalAmount,
+          additionalDescription: optionalTrim(dto.additionalDescription),
+          scope,
+          targetBuildingId: targets.targetBuildingId,
+          targetUnitId: targets.targetUnitId,
+          status: dto.status ?? MaintenanceConfigStatus.ACTIVE,
+        },
+      });
+      await this.audit(
+        tx,
+        user.id,
         societyId,
-        name: dto.name.trim(),
-        description: optionalTrim(dto.description),
-        monthlyAmount,
-        billingCycle: MaintenanceBillingCycle.MONTHLY,
-        dueDayOfMonth: dto.dueDayOfMonth,
-        additionalAmount,
-        additionalDescription: optionalTrim(dto.additionalDescription),
-        scope,
-        targetBuildingId: targets.targetBuildingId,
-        targetUnitId: targets.targetUnitId,
-        status: dto.status ?? MaintenanceConfigStatus.ACTIVE,
-      },
+        'maintenance_config.create',
+        created.id,
+      );
+      return created;
     });
-
-    await this.audit(user.id, societyId, 'maintenance_config.create', config.id);
     return toConfigDto(config);
   }
 
@@ -184,16 +195,20 @@ export class BillingService {
       targetUnitId: targets.targetUnitId,
     };
 
-    const config = await this.prisma.maintenanceConfiguration.update({
-      where: { id: configId },
-      data,
+    const config = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.maintenanceConfiguration.update({
+        where: { id: configId },
+        data,
+      });
+      await this.audit(
+        tx,
+        user.id,
+        existing.societyId,
+        'maintenance_config.update',
+        updated.id,
+      );
+      return updated;
     });
-    await this.audit(
-      user.id,
-      existing.societyId,
-      'maintenance_config.update',
-      config.id,
-    );
     return toConfigDto(config);
   }
 
@@ -223,9 +238,8 @@ export class BillingService {
      * Concurrency strategy:
      * Use a transaction-scoped PostgreSQL advisory lock keyed by society + billing
      * period so concurrent admin generate calls serialize invoice-number assignment
-     * and existing-bill checks. The partial unique index on
-     * (unit_id, period_year, period_month) WHERE status <> 'CANCELLED' remains the
-     * hard duplicate guard; unique violations are treated as already-existing.
+     * and existing-bill checks. `openPeriodKey` is the hard duplicate guard.
+     * Only that unique violation is treated as already-existing.
      */
     const summary = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`
@@ -253,37 +267,41 @@ export class BillingService {
         } catch (error) {
           if (
             error instanceof Prisma.PrismaClientKnownRequestError &&
-            error.code === 'P2002'
+            error.code === 'P2002' &&
+            isOpenBillConflict(error.meta?.target)
           ) {
             alreadyExisting += 1;
             continue;
           }
+          this.logger.error(
+            `Failed to create maintenance bill for unit ${candidate.createData.unitId}`,
+            error instanceof Error ? error.stack : undefined,
+          );
           failed.push({
             unitId: candidate.createData.unitId,
             unitNumber: candidate.preview.unitNumber,
-            reason:
-              error instanceof Error
-                ? error.message
-                : 'Failed to create maintenance bill',
+            reason: isInvoiceNumberConflict(error)
+              ? 'Could not assign a unique invoice number'
+              : 'Failed to create maintenance bill',
           });
         }
       }
 
-      return toGenerateResult({
+      const result = toGenerateResult({
         items: created,
         alreadyExisting,
         skippedIneligible: prepared.skippedIneligible,
         failed,
       });
-    });
-
-    await this.audit(user.id, societyId, 'maintenance_bills.generate', societyId, {
-      periodYear: dto.periodYear,
-      periodMonth: dto.periodMonth,
-      createdCount: summary.createdCount,
-      alreadyExisting: summary.alreadyExisting,
-      skippedIneligible: summary.skippedIneligible,
-      failedCount: summary.failed.length,
+      await this.audit(tx, user.id, societyId, 'maintenance_bills.generate', societyId, {
+        periodYear: dto.periodYear,
+        periodMonth: dto.periodMonth,
+        createdCount: result.createdCount,
+        alreadyExisting: result.alreadyExisting,
+        skippedIneligible: result.skippedIneligible,
+        failedCount: result.failed.length,
+      });
+      return result;
     });
 
     return summary;
@@ -374,18 +392,23 @@ export class BillingService {
   ): Promise<BillDto> {
     const bill = await this.requireBill(billId);
     await this.authorization.assertCanAdministerSociety(user, bill.societyId);
-    if (bill.status !== MaintenanceBillStatus.DRAFT) {
-      throw new ConflictException({
-        message: 'Only draft bills can be published',
-        code: 'CONFLICT',
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const changed = await tx.maintenanceBill.updateMany({
+        where: { id: billId, status: MaintenanceBillStatus.DRAFT },
+        data: { status: MaintenanceBillStatus.PUBLISHED },
       });
-    }
-    const updated = await this.prisma.maintenanceBill.update({
-      where: { id: billId },
-      data: { status: MaintenanceBillStatus.PUBLISHED },
-      include: billIncludes,
+      if (changed.count !== 1) {
+        throw new ConflictException({
+          message: 'Only draft bills can be published',
+          code: 'CONFLICT',
+        });
+      }
+      await this.audit(tx, user.id, bill.societyId, 'maintenance_bill.publish', billId);
+      return tx.maintenanceBill.findUniqueOrThrow({
+        where: { id: billId },
+        include: billIncludes,
+      });
     });
-    await this.audit(user.id, bill.societyId, 'maintenance_bill.publish', billId);
     return toBillDto(updated);
   }
 
@@ -396,19 +419,22 @@ export class BillingService {
     periodMonth: number,
   ): Promise<{ publishedCount: number }> {
     await this.authorization.assertCanAdministerSociety(user, societyId);
-    const result = await this.prisma.maintenanceBill.updateMany({
-      where: {
-        societyId,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.maintenanceBill.updateMany({
+        where: {
+          societyId,
+          periodYear,
+          periodMonth,
+          status: MaintenanceBillStatus.DRAFT,
+        },
+        data: { status: MaintenanceBillStatus.PUBLISHED },
+      });
+      await this.audit(tx, user.id, societyId, 'maintenance_bills.publish_period', societyId, {
         periodYear,
         periodMonth,
-        status: MaintenanceBillStatus.DRAFT,
-      },
-      data: { status: MaintenanceBillStatus.PUBLISHED },
-    });
-    await this.audit(user.id, societyId, 'maintenance_bills.publish_period', societyId, {
-      periodYear,
-      periodMonth,
-      publishedCount: result.count,
+        publishedCount: updated.count,
+      });
+      return updated;
     });
     return { publishedCount: result.count };
   }
@@ -419,24 +445,37 @@ export class BillingService {
   ): Promise<BillDto> {
     const bill = await this.requireBill(billId);
     await this.authorization.assertCanAdministerSociety(user, bill.societyId);
-    if (bill.status === MaintenanceBillStatus.CANCELLED) {
-      throw new ConflictException({
-        message: 'Bill is already cancelled',
-        code: 'CONFLICT',
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const changed = await tx.maintenanceBill.updateMany({
+        where: {
+          id: billId,
+          paidAmount: { lte: 0 },
+          status: { not: MaintenanceBillStatus.CANCELLED },
+        },
+        data: {
+          status: MaintenanceBillStatus.CANCELLED,
+          openPeriodKey: null,
+        },
       });
-    }
-    if ((bill.paidAmount as Money).greaterThan(0)) {
-      throw new ConflictException({
-        message: 'Bills with recorded payments cannot be cancelled; reverse payments first',
-        code: 'CONFLICT',
+      if (changed.count !== 1) {
+        const current = await tx.maintenanceBill.findUniqueOrThrow({
+          where: { id: billId },
+          select: { status: true },
+        });
+        throw new ConflictException({
+          message:
+            current.status === MaintenanceBillStatus.CANCELLED
+              ? 'Bill is already cancelled'
+              : 'Bills with recorded payments cannot be cancelled; reverse payments first',
+          code: 'CONFLICT',
+        });
+      }
+      await this.audit(tx, user.id, bill.societyId, 'maintenance_bill.cancel', billId);
+      return tx.maintenanceBill.findUniqueOrThrow({
+        where: { id: billId },
+        include: billIncludes,
       });
-    }
-    const updated = await this.prisma.maintenanceBill.update({
-      where: { id: billId },
-      data: { status: MaintenanceBillStatus.CANCELLED },
-      include: billIncludes,
     });
-    await this.audit(user.id, bill.societyId, 'maintenance_bill.cancel', billId);
     return toBillDto(updated);
   }
 
@@ -582,20 +621,21 @@ export class BillingService {
           include: billIncludes,
         });
 
+        await this.audit(
+          tx,
+          user.id,
+          bill.societyId,
+          'maintenance_payment.record',
+          payment.id,
+          {
+            billId,
+            amount: moneyString(amount),
+            idempotencyKey,
+          },
+        );
+
         return { payment, bill: updatedBill };
       });
-
-      await this.audit(
-        user.id,
-        bill.societyId,
-        'maintenance_payment.record',
-        result.payment.id,
-        {
-          billId,
-          amount: moneyString(amount),
-          idempotencyKey,
-        },
-      );
 
       return {
         payment: toPaymentDto(result.payment),
@@ -686,9 +726,7 @@ export class BillingService {
         .minus(paidAmount)
         .toDecimalPlaces(2);
       const status = deriveBillStatus(
-        lockedBill.status === MaintenanceBillStatus.CANCELLED
-          ? MaintenanceBillStatus.PUBLISHED
-          : lockedBill.status,
+        lockedBill.status,
         paidAmount,
         outstandingAmount,
         lockedBill.dueDate,
@@ -700,16 +738,17 @@ export class BillingService {
         include: billIncludes,
       });
 
+      await this.audit(
+        tx,
+        user.id,
+        payment.societyId,
+        'maintenance_payment.reverse',
+        paymentId,
+        { reason: dto.reason.trim() },
+      );
+
       return { payment: reversed, bill: updatedBill };
     });
-
-    await this.audit(
-      user.id,
-      payment.societyId,
-      'maintenance_payment.reverse',
-      paymentId,
-      { reason: dto.reason.trim() },
-    );
 
     return {
       payment: toPaymentDto(result.payment),
@@ -782,14 +821,23 @@ export class BillingService {
       ...(filters?.buildingId ? { buildingId: filters.buildingId } : {}),
     };
 
-    const bills = await this.prisma.maintenanceBill.findMany({
-      where,
-      select: {
+    const groups = await this.prisma.maintenanceBill.groupBy({
+      by: ['status'],
+      where: {
+        ...where,
+        status: {
+          notIn: [
+            MaintenanceBillStatus.CANCELLED,
+            MaintenanceBillStatus.DRAFT,
+          ],
+        },
+      },
+      _sum: {
         totalAmount: true,
         paidAmount: true,
         outstandingAmount: true,
-        status: true,
       },
+      _count: { _all: true },
     });
 
     let totalBilled = money('0');
@@ -800,25 +848,27 @@ export class BillingService {
     let partiallyPaidInvoiceCount = 0;
     let unpaidInvoiceCount = 0;
 
-    for (const bill of bills) {
-      if (bill.status === MaintenanceBillStatus.DRAFT) {
-        continue;
+    for (const group of groups) {
+      const count = group._count._all;
+      totalBilled = totalBilled.plus(money(group._sum.totalAmount ?? 0));
+      totalCollected = totalCollected.plus(money(group._sum.paidAmount ?? 0));
+      totalOutstanding = totalOutstanding.plus(
+        money(group._sum.outstandingAmount ?? 0),
+      );
+      if (group.status === MaintenanceBillStatus.OVERDUE) {
+        overdueAmount = overdueAmount.plus(
+          money(group._sum.outstandingAmount ?? 0),
+        );
       }
-      totalBilled = totalBilled.plus(bill.totalAmount as Money);
-      totalCollected = totalCollected.plus(bill.paidAmount as Money);
-      totalOutstanding = totalOutstanding.plus(bill.outstandingAmount as Money);
-      if (bill.status === MaintenanceBillStatus.OVERDUE) {
-        overdueAmount = overdueAmount.plus(bill.outstandingAmount as Money);
-      }
-      if (bill.status === MaintenanceBillStatus.PAID) paidInvoiceCount += 1;
-      if (bill.status === MaintenanceBillStatus.PARTIALLY_PAID) {
-        partiallyPaidInvoiceCount += 1;
+      if (group.status === MaintenanceBillStatus.PAID) paidInvoiceCount += count;
+      if (group.status === MaintenanceBillStatus.PARTIALLY_PAID) {
+        partiallyPaidInvoiceCount += count;
       }
       if (
-        bill.status === MaintenanceBillStatus.PUBLISHED ||
-        bill.status === MaintenanceBillStatus.OVERDUE
+        group.status === MaintenanceBillStatus.PUBLISHED ||
+        group.status === MaintenanceBillStatus.OVERDUE
       ) {
-        unpaidInvoiceCount += 1;
+        unpaidInvoiceCount += count;
       }
     }
 
@@ -831,6 +881,27 @@ export class BillingService {
       partiallyPaidInvoiceCount,
       unpaidInvoiceCount,
     };
+  }
+
+  async sumOutstandingForUnit(
+    societyId: string,
+    unitId: string,
+  ): Promise<string> {
+    const sum = await this.prisma.maintenanceBill.aggregate({
+      where: {
+        societyId,
+        unitId,
+        status: {
+          in: [
+            MaintenanceBillStatus.PUBLISHED,
+            MaintenanceBillStatus.PARTIALLY_PAID,
+            MaintenanceBillStatus.OVERDUE,
+          ],
+        },
+      },
+      _sum: { outstandingAmount: true },
+    });
+    return moneyString(money(sum._sum.outstandingAmount ?? 0));
   }
 
   private async resolveIdempotentPayment(
@@ -951,6 +1022,7 @@ export class BillingService {
         dto.periodYear,
         dto.periodMonth,
         unit.unitNumber,
+        unit.id,
         seq,
       );
       seq += 1;
@@ -989,6 +1061,7 @@ export class BillingService {
         configId: config.id,
         billedUserId: residentByUnit.get(unit.id) ?? null,
         invoiceNumber,
+        openPeriodKey: openBillKey(unit.id, dto.periodYear, dto.periodMonth),
         periodYear: dto.periodYear,
         periodMonth: dto.periodMonth,
         periodStart: period.start,
@@ -1228,21 +1301,27 @@ export class BillingService {
       bill.dueDate < today &&
       (bill.outstandingAmount as Money).greaterThan(0)
     ) {
-      await this.prisma.maintenanceBill.update({
-        where: { id: bill.id },
+      await this.prisma.maintenanceBill.updateMany({
+        where: {
+          id: bill.id,
+          status: bill.status,
+          dueDate: { lt: today },
+          outstandingAmount: { gt: 0 },
+        },
         data: { status: MaintenanceBillStatus.OVERDUE },
       });
     }
   }
 
   private async audit(
+    db: Prisma.TransactionClient,
     actorUserId: string,
     societyId: string,
     action: string,
     entityId: string,
     metadata?: Prisma.InputJsonValue,
   ): Promise<void> {
-    await this.prisma.auditLog.create({
+    await db.auditLog.create({
       data: {
         societyId,
         actorUserId,
@@ -1321,10 +1400,42 @@ function buildInvoiceNumber(
   year: number,
   month: number,
   unitNumber: string,
+  unitId: string,
   seq: number,
 ): string {
   const safeUnit = unitNumber.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16) || 'UNIT';
-  return `INV-${year}${String(month).padStart(2, '0')}-${safeUnit}-${String(seq).padStart(4, '0')}`;
+  const unitToken = unitId.replace(/-/g, '').slice(0, 8);
+  return `INV-${year}${String(month).padStart(2, '0')}-${safeUnit}-${unitToken}-${String(seq).padStart(4, '0')}`;
+}
+
+function openBillKey(unitId: string, year: number, month: number): string {
+  return `${unitId}:${year}:${month}`;
+}
+
+function uniqueTargetText(target: unknown): string {
+  if (Array.isArray(target)) {
+    return target.filter((part) => typeof part === 'string').join(',');
+  }
+  return typeof target === 'string' ? target : '';
+}
+
+export function isOpenBillConflict(target: unknown): boolean {
+  const text = uniqueTargetText(target).toLowerCase();
+  return (
+    text.includes('open_period') ||
+    text.includes('openperiodkey') ||
+    text.includes('unit_period_open')
+  );
+}
+
+function isInvoiceNumberConflict(error: unknown): boolean {
+  if (
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== 'P2002'
+  ) {
+    return false;
+  }
+  return uniqueTargetText(error.meta?.target).toLowerCase().includes('invoice');
 }
 
 function deriveBillStatus(
@@ -1333,6 +1444,9 @@ function deriveBillStatus(
   outstandingAmount: Money,
   dueDate: Date,
 ): MaintenanceBillStatus {
+  if (current === MaintenanceBillStatus.CANCELLED) {
+    return MaintenanceBillStatus.CANCELLED;
+  }
   if (outstandingAmount.lessThanOrEqualTo(0)) {
     return MaintenanceBillStatus.PAID;
   }
@@ -1343,12 +1457,6 @@ function deriveBillStatus(
   }
   const today = startOfUtcDay(new Date());
   if (dueDate < today) return MaintenanceBillStatus.OVERDUE;
-  if (
-    current === MaintenanceBillStatus.DRAFT ||
-    current === MaintenanceBillStatus.CANCELLED
-  ) {
-    return MaintenanceBillStatus.PUBLISHED;
-  }
   return MaintenanceBillStatus.PUBLISHED;
 }
 

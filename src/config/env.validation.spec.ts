@@ -14,6 +14,17 @@ describe('readAppConfig', () => {
     expect(config.supabaseServiceRoleKey).toBeUndefined();
     expect(config.supabaseJwtSecret).toBeUndefined();
     expect(config.supabaseJwksUrl).toBeUndefined();
+    expect(config.trustedProxyHops).toBe(0);
+  });
+
+  it('accepts a fixed proxy hop count and rejects spoofable values', () => {
+    expect(readAppConfig({ TRUSTED_PROXY_HOPS: '1' }).trustedProxyHops).toBe(1);
+    expect(() => readAppConfig({ TRUSTED_PROXY_HOPS: 'true' })).toThrow(
+      /TRUSTED_PROXY_HOPS/,
+    );
+    expect(() => readAppConfig({ TRUSTED_PROXY_HOPS: '6' })).toThrow(
+      /TRUSTED_PROXY_HOPS/,
+    );
   });
 
   it('normalizes the API prefix and accepts paired Supabase settings', () => {
