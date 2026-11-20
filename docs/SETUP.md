@@ -1,62 +1,76 @@
-# Backend Setup
+# HomelyBlock — Project setup
 
-Verified on 2026-10-29 with Node.js v24.21.0 and npm 11.19.0. NestJS is 12.3.2. Prisma CLI / client target version is **7.10.1**. This repository uses npm (`package-lock.json`, lockfileVersion 3).
+Local development and the production migration command. Do not put real secrets in this file.
 
-## Install
+## Prerequisites
 
-From `livingspace-be`:
+- Node.js `>=20.9.0` and npm
+- Docker Desktop, for local PostgreSQL
+- A Supabase project for sign-in
+
+## Local database
+
+From `homelyblock-be`:
 
 ```bash
 npm ci
-```
-
-If `npm ci` / `npm install` fails writing under `node_modules/@prisma`, some packages are owned by `root` from an earlier elevated install. Fix ownership **only in this repository**, then reinstall:
-
-```bash
-sudo chown -R "$(id -un):staff" /Users/apple/WORK/LivingSpace/livingspace-be/node_modules
-cd /Users/apple/WORK/LivingSpace/livingspace-be
-npm install
-```
-
-Do not run npm as root. Do not use `chmod -R 777`. After a successful install, `node_modules/.bin/prisma` must exist and `npm run prisma:validate` must use that local binary.
-
-## Environment
-
-```bash
 cp .env.example .env
+npm run db:up
+npm run prisma:generate
+npm run prisma:migrate:deploy
 ```
 
-Required / commonly set values:
+Docker Compose publishes PostgreSQL on `localhost:5434`. The development database is `livingspace_dev`. The integration-test database is `livingspace_test`. Create the test database once with `npm run db:create-test` if it is missing.
+
+`npm run prisma:migrate` is `prisma migrate dev`. Use it only when you are creating a new migration on your own development database. Use `npm run prisma:migrate:deploy` to apply migrations that are already in the repository.
+
+## Local API and application
+
+Backend `.env` needs at least:
 
 ```bash
 NODE_ENV=development
 PORT=4000
 API_PREFIX=api/v1
 CORS_ORIGINS=http://localhost:3000
-DATABASE_URL=postgresql://USER:PASSWORD@localhost:5434/livingspace_dev
+TRUSTED_PROXY_HOPS=0
+DATABASE_URL=postgresql://postgres:postgres@localhost:5434/livingspace_dev
+DATABASE_URL_TEST=postgresql://postgres:postgres@localhost:5434/livingspace_test
 ```
 
-`ConfigModule` loads `.env`. Nest can start without Supabase settings; protected routes then return 401 until verification is configured. Prisma CLI commands require `DATABASE_URL` (a local placeholder is enough for `validate` / `generate`; a real development database is required to apply migrations).
+Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` together, or leave both unset. Protected routes return 401 until they are set. `SIGNUP_INTENT_SECRET` must match the same value on the frontend server. Do not put the Supabase service-role key in the frontend.
 
-Auth-related variables (set URL + anon key together, or leave both unset):
+From `homelyblock-fe`:
 
 ```bash
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-SUPABASE_ANON_KEY=
-# Optional JWKS / issuer overrides; JWKS is preferred for asymmetric keys:
-# SUPABASE_JWKS_URL=https://YOUR_PROJECT.supabase.co/auth/v1/.well-known/jwks.json
-# SUPABASE_JWT_ISSUER=https://YOUR_PROJECT.supabase.co/auth/v1
-# Legacy HS256 only:
-# SUPABASE_JWT_SECRET=
-# Backend-only — never expose to the frontend:
-# SUPABASE_SERVICE_ROLE_KEY=
+npm ci
+cp .env.example .env.local
 ```
 
-`GET /api/v1/me` verifies the bearer token, then upserts `user_profiles` keyed by the Supabase user UUID (and syncs `email` when present on the token). That path needs applied Prisma migrations and a reachable `DATABASE_URL`. Token verification itself does not require the service-role key.
+Set `NEXT_PUBLIC_API_URL=http://localhost:4000`, `NEXT_PUBLIC_SITE_URL=http://localhost:3000`, and the Supabase URL plus one public key (`NEXT_PUBLIC_SUPABASE_ANON_KEY` or `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`). Never put a database URL, a service-role key, or a secret key in a `NEXT_PUBLIC_` variable.
 
-### First `PLATFORM_OWNER`
+In the Supabase dashboard, set the site URL and add these redirect URLs:
 
-There is no self-promotion API. After the owner signs in once (so `user_profiles` exists):
+- `http://localhost:3000/auth/callback`
+- `http://localhost:3000/auth/update-password`
+
+Add the same two paths for the deployed site origin before testing password recovery there.
+
+Start both from the workspace root with `./dev.sh`, or start them separately:
+
+```bash
+npm --prefix homelyblock-be run start:dev
+npm --prefix homelyblock-fe run dev
+```
+
+- Application: http://localhost:3000
+- API liveness: http://localhost:4000/api/v1/health
+- API readiness: http://localhost:4000/api/v1/health/ready
+- Swagger: http://localhost:4000/api/docs while `NODE_ENV` is not `production`
+
+## First platform owner
+
+Public sign-up cannot create a platform owner. After the person has signed in once, so a `user_profiles` row exists, run this against the development database only:
 
 ```sql
 UPDATE user_profiles
@@ -64,152 +78,29 @@ SET platform_role = 'PLATFORM_OWNER'
 WHERE id = '<supabase-auth-user-uuid>';
 ```
 
-Verify with `GET /api/v1/me` (`platformRole: "PLATFORM_OWNER"`).
+Confirm with `GET /api/v1/me`. The platform owner signs in at `/admin/sign-in`. Residents and society admins use `/sign-in` and `/sign-up`.
 
-### Integration tests
+## Optional email
 
-```bash
-# create once; do not drop or reset an existing database
-docker exec -i livingspace-pg psql -U postgres -c "CREATE DATABASE livingspace_test;"
+Contact email is sent only when `SUPPORT_EMAIL`, `MAIL_FROM`, and `RESEND_API_KEY` are all set on the API. Otherwise the message is stored and the form says that no email was sent. Invitations are in-app. Password recovery is sent by Supabase, not by HomelyBlock.
 
-# Either export it, or put the same line in livingspace-be/.env (the file is not committed).
-export DATABASE_URL_TEST='postgresql://postgres:postgres@localhost:5434/livingspace_test'
-npm run test:integration
-```
+Leave `COMPLAINT_ATTACHMENT_STORAGE` unset unless complaint images are explicitly enabled. Uploads return 503 while storage is disabled.
 
-`DATABASE_URL_TEST` is required. The command reads the environment first and then `.env` if the variable is unset. It prints the selected database name and host, without the password, and then runs Vitest. Vitest prints passed, failed, and skipped counts separately.
+Leave `TRUSTED_PROXY_HOPS` at `0` unless every request reaches the API through a known reverse proxy and clients cannot open the API port directly.
 
-If the variable is missing, the command prints `DATABASE_URL_TEST is required for integration tests` and exits non-zero. It does not report a successful skipped suite. A non-localhost URL, a database name that does not include `livingspace_test`, or a name that looks like production or staging is rejected the same way. The development database `livingspace_dev` is not selected.
+## Production database
 
-Never put the Supabase service-role key in the frontend. Never commit real credentials.
+Take a backup before migrating a database that already has society data.
 
-## PostgreSQL (development)
-
-This machine did not have a listening PostgreSQL instance on port 5432 during setup. Docker Desktop is installed but the daemon was not running.
-
-Simplest local options (choose one; do not use production):
-
-### Option A — Docker (recommended when Docker Desktop is running)
-
-Start Docker Desktop first. If `docker run` fails with “Cannot connect to the Docker daemon”, open the Docker app and wait until it is ready.
+From `homelyblock-be`, with `DATABASE_URL` set to that database’s direct connection string (not the transaction pooler):
 
 ```bash
-open -a Docker
-# wait until: docker info
+npm run prisma:migrate:status
+npm run prisma:migrate:deploy
 ```
 
-This workspace maps host **5434** → container **5432** (`docker ps` should show `0.0.0.0:5434->5432/tcp` for `livingspace-pg`):
+This applies only migrations that are not yet recorded. The current set includes `20261119143000_integrity_keys` and `20261120103000_society_scope_and_invitations`. If existing rows cross societies, emails differ only by case, or two active household members share a name, the migration stops and does not rewrite the data.
 
-Preferred (Compose — also creates `livingspace_test` on first volume init):
+Do not run `scripts/fresh-migrate-check.mjs` against a shared or production database. That script creates a local database and then drops it. Do not run `prisma migrate dev` or `prisma migrate reset` against production.
 
-```bash
-npm run db:up
-# docker compose up -d
-```
-
-Legacy one-off container:
-
-```bash
-docker run --name livingspace-pg \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=livingspace_dev \
-  -p 5434:5432 \
-  -d postgres:16
-npm run db:create-test
-```
-
-```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:5434/livingspace_dev
-DATABASE_URL_TEST=postgresql://postgres:postgres@localhost:5434/livingspace_test
-```
-
-Prisma CLI loads `.env` via `prisma.config.ts`. If you see `PrismaConfigEnvError: Cannot resolve environment variable: DATABASE_URL`, create `.env` from `.env.example` or export `DATABASE_URL`.
-
-Confirm the mapped host port before editing `.env`.
-
-### Option B — Homebrew PostgreSQL
-
-```bash
-brew install postgresql@16
-brew services start postgresql@16
-createuser -s postgres
-createdb livingspace_dev
-```
-
-Do not install packages or start containers until you intentionally choose an option.
-
-## Prisma
-
-Schema: `prisma/schema.prisma`  
-Config: `prisma.config.ts`  
-Migrations: `prisma/migrations/`  
-Generated client: `src/generated/prisma/` (gitignored)
-
-```bash
-npm run prisma:validate
-npm run prisma:generate
-npm run prisma:migrate
-```
-
-`prisma:migrate` runs `prisma migrate dev` and needs a reachable development database. The initial migration `prisma/migrations/20261029130000_init/` is already in the repository. When the database is available:
-
-```bash
-npx prisma migrate deploy
-```
-
-or continue with `npm run prisma:migrate` for further schema changes. Do not use `db push` for the initial workflow. Do not reset shared or production databases.
-
-Canonical data model: workspace `Documents/DATABASE.md`. Backend notes: `docs/DATABASE.md`.
-
-## Structure
-
-```text
-src/
-├── app.module.ts
-├── app.controller.ts
-├── app.service.ts
-├── main.ts
-├── auth/               # token verification, AuthGuard, GET /me, profile sync
-├── authorization/      # RBAC decorators, AuthorizationGuard, probes
-├── societies/          # Society create/list/detail
-├── prisma/
-├── config/
-├── common/
-├── health/
-└── generated/prisma/   # created by prisma generate; not committed
-prisma/
-├── schema.prisma
-└── migrations/
-```
-
-Society, notices, and visitor feature modules are not created yet. Auth establishes identity only.
-
-## Run
-
-```bash
-npm run start:dev
-```
-
-- API: http://localhost:4000
-- Health: http://localhost:4000/api/v1/health
-- Current user (Bearer): http://localhost:4000/api/v1/me
-- Swagger: http://localhost:4000/api/docs
-
-## Checks
-
-| Command | Notes |
-| --- | --- |
-| `npm run lint` | Nest source |
-| `npm test` / `npm run test:e2e` | Nest unit/e2e |
-| `npm run build` | Nest build |
-| `npm run prisma:validate` | Requires local Prisma CLI |
-| `npm run prisma:generate` | Writes `src/generated/prisma` |
-| `npx prisma migrate deploy` | Requires reachable development PostgreSQL |
-
-## Troubleshooting
-
-- **Prisma command not found:** fix `node_modules` ownership (see Install), then `npm install`.
-- **No PostgreSQL:** start Docker Desktop or install Postgres locally; update `DATABASE_URL`.
-- **Migration against production:** do not. Use a dedicated `livingspace_dev` database.
-- Port 4000 in use: stop the other process or set `PORT`.
+After the migration, confirm both health URLs on the deployed API, then follow `TESTING.md`.

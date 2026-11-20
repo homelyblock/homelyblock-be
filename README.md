@@ -1,22 +1,18 @@
-# LivingSpace backend
+# HomelyBlock API
 
-NestJS 12 API for LivingSpace. Product and API contracts live in the parent `Documents/` folder. Local setup detail is in `docs/SETUP.md`.
+NestJS 12 API. Setup, local database, production migration steps, engineering rules, and the testing script are in `docs/`.
 
-## Setup
-
-Node.js `>=20.9.0`, npm, and PostgreSQL 16 (Docker Compose maps host port 5434).
+Node.js `>=20.9.0`, npm, and PostgreSQL 16. Docker Compose maps host port 5434.
 
 ```bash
 npm ci
 cp .env.example .env
 npm run db:up
-npm run prisma:migrate
+npm run prisma:migrate:deploy
 npm run start:dev
 ```
 
-The API listens at http://localhost:4000. Liveness is `GET /api/v1/health`. Readiness, including a database query, is `GET /api/v1/health/ready`. Swagger is at http://localhost:4000/api/docs when `NODE_ENV` is not `production`.
-
-## Checks
+The API listens at http://localhost:4000. Liveness is `GET /api/v1/health`. Readiness is `GET /api/v1/health/ready`. Swagger is at http://localhost:4000/api/docs when `NODE_ENV` is not `production`.
 
 ```bash
 npm run lint
@@ -26,4 +22,4 @@ npm run test:integration
 npm run build
 ```
 
-Integration tests require `DATABASE_URL_TEST`. `npm run test:integration` reads it from the environment, or from `.env` when the environment variable is unset. The URL must be a localhost PostgreSQL database whose name includes `livingspace_test`. If it is missing or unsafe, the command exits non-zero and does not skip the suite.
+`npm run test:integration` requires `DATABASE_URL_TEST` on localhost and a database name containing `livingspace_test`. It does not skip the suite when that URL is missing or unsafe.

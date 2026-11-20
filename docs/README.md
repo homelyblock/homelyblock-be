@@ -1,34 +1,20 @@
-# LivingSpace Backend
+# HomelyBlock
 
-NestJS + TypeScript REST API for LivingSpace.
+HomelyBlock is a web application for residential society operations: buildings and flats, memberships, notices, visitors, complaints, maintenance bills, and a service directory. It is not a payment gateway, a gate-hardware system, or a messaging product.
 
-## Status
-The workspace-level `PRD.md` describes intended features. This README must be updated to reflect what is actually implemented.
+The application is two repositories:
 
-## Setup
-From this repository, with Node.js `>=20.9.0` and npm:
+- `homelyblock-fe` — Next.js application on port 3000
+- `homelyblock-be` — NestJS API on port 4000, PostgreSQL through Prisma
 
-```bash
-npm ci
-cp .env.example .env
-npm run start:dev
-```
+## Read these
 
-The API listens at http://localhost:4000. Health is at http://localhost:4000/api/v1/health. Swagger is at http://localhost:4000/api/docs. `.env.example` sets `NODE_ENV`, `PORT`, `API_PREFIX`, and `CORS_ORIGINS`. Database, Supabase, and Prisma model prerequisites are in `docs/SETUP.md` and `docs/DATABASE.md`.
+| Document | Who it is for |
+| --- | --- |
+| [SETUP.md](SETUP.md) | Anyone installing the project locally, or applying database migrations to an existing environment |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Engineers changing the application |
+| [TESTING.md](TESTING.md) | The testing team, including checks on an already deployed environment |
 
-```bash
-npm run lint
-npm test
-npm run test:e2e
-npm run build
-```
+Screen colors and layout are in the frontend repository at `docs/DESIGN.md`.
 
-## Security
-- Authenticate protected requests.
-- Enforce role and society-level authorization server-side.
-- Never expose secrets in source control.
-- Do not reset shared/production databases to resolve local errors.
-- Keep Swagger/OpenAPI aligned with implemented routes.
-
-## Shared documentation
-The canonical architecture, schema, API, and security documents live in the parent workspace. Open the full `LivingSpace` folder in Cursor when changing both FE and BE contracts.
+The Prisma schema in this repository and the development Swagger page are the live API and database contracts. These files are the copies committed with this repository.
