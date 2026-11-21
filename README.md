@@ -14,6 +14,8 @@ npm run start:dev
 
 The API listens at http://localhost:4000. Liveness is `GET /api/v1/health`. Readiness is `GET /api/v1/health/ready`. Swagger is at http://localhost:4000/api/docs in development. Set `SWAGGER_ENABLED=true` to open `/api/docs` in production.
 
+`npm run start:prod` applies pending migrations, then starts the server. Use that as the Render start command. It does not run on a local Git commit.
+
 ```bash
 npm run lint
 npm test
